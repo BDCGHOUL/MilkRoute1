@@ -24,6 +24,10 @@ const MapView: React.FC<MapViewProps> = ({
   const routeLineRef = useRef<L.Polyline | null>(null);
   const closuresRef = useRef<L.LayerGroup | null>(null);
   const onMapClickRef = useRef(onMapClick);
+  
+  // Track state for throttling route fetches
+  const lastFetchedPos = useRef<[number, number] | null>(null);
+  const lastFetchedIndex = useRef<number | null>(null);
 
   useEffect(() => {
     onMapClickRef.current = onMapClick;
@@ -38,14 +42,25 @@ const MapView: React.FC<MapViewProps> = ({
       fadeAnimation: true
     }).setView([52.23886, 0.18287], 13);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 20 }).addTo(mapRef.current);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { 
+      maxZoom: 20 
+    }).addTo(mapRef.current);
+
     markersRef.current = L.layerGroup().addTo(mapRef.current);
     closuresRef.current = L.layerGroup().addTo(mapRef.current);
-    // Route line is now solid for better visibility
-    routeLineRef.current = L.polyline([], { color: '#3b82f6', weight: 6, opacity: 0.8, lineJoin: 'round' }).addTo(mapRef.current);
+    
+    // Thick, road-following solid line
+    routeLineRef.current = L.polyline([], { 
+      color: '#3b82f6', 
+      weight: 7, 
+      opacity: 0.9, 
+      lineJoin: 'round',
+      lineCap: 'round',
+      smoothFactor: 1.5
+    }).addTo(mapRef.current);
     
     userMarkerRef.current = L.circleMarker([0, 0], {
-      radius: 9, fillColor: '#ffffff', color: '#3b82f6', weight: 4, fillOpacity: 1
+      radius: 10, fillColor: '#ffffff', color: '#3b82f6', weight: 4, fillOpacity: 1
     }).addTo(mapRef.current);
 
     mapRef.current.on('click', (e) => {
@@ -99,7 +114,11 @@ const MapView: React.FC<MapViewProps> = ({
           icon: L.divIcon({ html: markerHtml, className: 'call-icon', iconSize: [40, 40], iconAnchor: [20, 20] })
         });
       
-      marker.bindTooltip(`<div class="bg-black border border-white/20 px-3 py-1.5 rounded-xl text-[11px] font-black uppercase text-white italic">${stop.addr}</div>`, { permanent: isCurrent, direction: 'top', offset: [0, -10] }).addTo(markersRef.current!);
+      marker.bindTooltip(`<div class="bg-black border border-white/20 px-3 py-1.5 rounded-xl text-[11px] font-black uppercase text-white italic">${stop.addr}</div>`, { 
+        permanent: isCurrent, 
+        direction: 'top', 
+        offset: [0, -10] 
+      }).addTo(markersRef.current!);
     });
 
     closuresRef.current.clearLayers();
@@ -119,10 +138,12 @@ const MapView: React.FC<MapViewProps> = ({
 
   useEffect(() => {
     if (!mapRef.current || !lastPos || !userMarkerRef.current) return;
+    
     userMarkerRef.current.setLatLng(lastPos);
     const currentStop = stops[index];
+    
     if (currentStop) {
-      // AUTO ZOOM: Include padding to ensure UI doesn't cover user or stop
+      // Auto-Zoom Bounds
       const bounds = L.latLngBounds([lastPos, [currentStop.lat, currentStop.lng]]);
       mapRef.current.fitBounds(bounds, { 
         padding: [100, 100], 
@@ -131,24 +152,35 @@ const MapView: React.FC<MapViewProps> = ({
         duration: 0.5
       });
 
-      const fetchRoute = async () => {
-        try {
-          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${lastPos[1]},${lastPos[0]};${currentStop.lng},${currentStop.lat}?overview=full&geometries=geojson`);
-          const data = await res.json();
-          if (data.routes?.[0]?.geometry) {
-            const coords = data.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
-            routeLineRef.current?.setLatLngs(coords);
-          } else {
-             // Fallback to straight line if API fails
-             routeLineRef.current?.setLatLngs([[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]]);
+      // Throttle route fetching: Only fetch if index changed or user moved > 25m
+      const distMoved = lastFetchedPos.current ? 
+        mapRef.current.distance(lastPos, lastFetchedPos.current) : 100;
+
+      if (distMoved > 25 || lastFetchedIndex.current !== index) {
+        const fetchRoute = async () => {
+          try {
+            // HIGH FIDELITY ROAD ROUTING: 
+            // overview=full returns every coordinate point of the road geometry
+            const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${lastPos[1]},${lastPos[0]};${currentStop.lng},${currentStop.lat}?overview=full&geometries=geojson`);
+            const data = await res.json();
+            
+            if (data.routes?.[0]?.geometry) {
+              const coords = data.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
+              routeLineRef.current?.setLatLngs(coords);
+              lastFetchedPos.current = lastPos;
+              lastFetchedIndex.current = index;
+            } else {
+              // Fallback to straight line if OSRM geometry is unavailable
+              routeLineRef.current?.setLatLngs([[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]]);
+            }
+          } catch (e) {
+            console.error("Route Logic Failure:", e);
           }
-        } catch (e) {
-          routeLineRef.current?.setLatLngs([[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]]);
-        }
-      };
-      fetchRoute();
+        };
+        fetchRoute();
+      }
     } else {
-       routeLineRef.current?.setLatLngs([]);
+      routeLineRef.current?.setLatLngs([]);
     }
   }, [lastPos, index, stops]);
 

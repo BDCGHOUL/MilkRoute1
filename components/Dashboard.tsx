@@ -54,10 +54,15 @@ const Dashboard: React.FC<DashboardProps> = ({
     const fetchETAs = async () => {
       try {
         const remaining = stops.slice(index);
-        // Limit coordinates to 50 for OSRM public API stability
-        const limitedRemaining = remaining.slice(0, 50);
+        // OSRM public API is most stable with < 20 waypoints. 
+        // We use 10 for high-fidelity and estimate the rest.
+        const lookaheadCount = 10;
+        const limitedRemaining = remaining.slice(0, lookaheadCount);
         const coordsStr = `${lastPos[1]},${lastPos[0]};` + limitedRemaining.map(s => `${s.lng},${s.lat}`).join(';');
+        
         const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`);
+        if (!res.ok) throw new Error('OSRM Busy');
+        
         const data = await res.json();
 
         if (data.routes?.[0]) {
@@ -65,31 +70,31 @@ const Dashboard: React.FC<DashboardProps> = ({
           const route = data.routes[0];
           setRouteCoords(route.geometry.coordinates);
 
-          // Approximate total time: OSRM duration for the limited set + linear estimate for the rest
+          // Precision drive time for next 10 stops
           let driveTime = route.duration * ETA_MULTIPLIER;
-          if (remaining.length > 50) {
-            // Add a rough estimate for the remaining stops not in the OSRM call (approx 4 mins per stop)
-            driveTime += (remaining.length - 50) * 240;
+          
+          // Add estimation for stops beyond the lookahead (approx 3.5 mins driving per city stop)
+          if (remaining.length > lookaheadCount) {
+            driveTime += (remaining.length - lookaheadCount) * 210;
           }
+
           const serviceTime = remaining.length * SERVICE_TIME_PER_STOP;
           const totalFinish = new Date(now + (driveTime + serviceTime) * 1000);
+          
           setEtaFinish(totalFinish.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
 
           const nextDrive = (route.legs[0]?.duration || 0) * ETA_MULTIPLIER;
           const nextArrival = new Date(now + (nextDrive) * 1000);
           setEtaNext(nextArrival.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
-        } else {
-           setEtaFinish('BUSY');
-           setEtaNext('--:--');
         }
       } catch (err) {
-        setEtaFinish('FAIL');
-        setEtaNext('--:--');
+        console.error("ETA Fetch Failed:", err);
+        // Do not clear the UI on single failure to prevent flickering
       }
     };
 
     fetchETAs();
-    const timer = setInterval(fetchETAs, 30000);
+    const timer = setInterval(fetchETAs, 20000);
     return () => clearInterval(timer);
   }, [index, stops, lastPos]);
 

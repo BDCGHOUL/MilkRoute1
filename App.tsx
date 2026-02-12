@@ -85,11 +85,12 @@ const App: React.FC = () => {
 
     const savedClosures = localStorage.getItem('log_nav_closures');
     if (savedClosures) setClosures(JSON.parse(savedClosures));
-    // Reset Admin on reload
+    
+    // Always clear admin on boot
     setIsAdmin(false);
   }, []);
 
-  // Proximity Loop - Decoupled to avoid stuck timers
+  // Proximity Loop - Robustly decoupled to prevent resets
   useEffect(() => {
     if (!isStarted || !lastPos || index >= stops.length) return;
 
@@ -249,7 +250,8 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full w-full bg-[#030303] items-center overflow-hidden">
-      <div className="flex flex-col h-full w-full max-w-[650px] bg-black text-white p-2 sm:p-4 gap-2 sm:gap-4 relative shadow-[0_0_150px_rgba(0,0,0,1)] border-x border-white/5">
+      {/* Optimized Desktop container size for better visibility */}
+      <div className="flex flex-col h-full w-full max-w-[700px] bg-black text-white p-2 sm:p-4 gap-2 sm:gap-4 relative shadow-[0_0_150px_rgba(0,0,0,1)] border-x border-white/5">
         
         {!isStarted && (
           <Overlay 
@@ -262,6 +264,7 @@ const App: React.FC = () => {
           />
         )}
 
+        {/* Tactical Header */}
         <div className="flex justify-between items-center h-16 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-xl">
           <div className="flex flex-col">
             <span className="text-[10px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1 italic">Logistics Core</span>
@@ -286,6 +289,7 @@ const App: React.FC = () => {
           closures={closures} 
         />
 
+        {/* Viewport Container */}
         <div className="flex-1 relative rounded-[2.5rem] overflow-hidden border border-zinc-800 bg-zinc-950 shadow-inner min-h-0">
           <MapView 
             stops={stops} 
@@ -306,27 +310,11 @@ const App: React.FC = () => {
           
           {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-14 h-14 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse shadow-[0_0_30px_rgba(239,68,68,0.4)]"><div className="w-2 h-2 bg-red-500 rounded-full"/></div></div>}
 
-          {isAdmin && (
-            <div className="absolute top-6 right-6 flex flex-col gap-4 z-[1000]">
-              <button 
-                onClick={() => setIsClosureMode(!isClosureMode)} 
-                className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110' : 'bg-black/90 backdrop-blur-md border-white/20'}`}
-              >
-                <Construction size={24} className={isClosureMode ? 'animate-pulse text-white' : 'text-zinc-400'} />
-              </button>
-              <button 
-                onClick={() => setActiveModal('ADD_STOP')} 
-                className="w-14 h-14 bg-white text-black rounded-2xl flex items-center justify-center shadow-2xl active:scale-90 border-2 border-white/20"
-              >
-                <Plus size={28} />
-              </button>
-            </div>
-          )}
-
+          {/* Overlay Actions */}
           <div className="absolute bottom-6 left-6 right-6 flex gap-4 z-[1000]">
              <button 
                onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
-               className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800 transition-transform"
+               className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800 transition-all"
              >
                <Navigation2 size={24} fill="currentColor" />
                Launch Navigation
