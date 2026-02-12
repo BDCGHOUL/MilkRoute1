@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Stop, RoadClosure } from '../types';
-import { ETA_MULTIPLIER, SERVICE_TIME_PER_STOP } from '../constants';
+import { ETA_MULTIPLIER, SERVICE_TIME_PER_STOP, TRIGGER_DIST } from '../constants';
 import { AlertTriangle, MapPin, Clock, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 interface DashboardProps {
@@ -82,23 +82,41 @@ const Dashboard: React.FC<DashboardProps> = ({
     return () => clearInterval(timer);
   }, [index, stops, lastPos]);
 
-  const currentStop = stops[index];
+  // Find which stop we are currently "at" to show in the UI if arrived
+  const getNearbyStop = () => {
+    if (!lastPos) return null;
+    const R = 6371e3;
+    const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
+    const nearbyIdx = stops.findIndex((s, i) => i >= index && haversine(lastPos[0], lastPos[1], s.lat, s.lng) < TRIGGER_DIST);
+    return nearbyIdx !== -1 ? { ...stops[nearbyIdx], actualIndex: nearbyIdx } : null;
+  };
+
+  const nearbyStop = getNearbyStop();
+  const currentStop = isArrived && nearbyStop ? nearbyStop : stops[index];
   const queue = stops.slice(index + 1, index + 3);
   const dropsLeft = Math.max(0, stops.length - index);
 
   return (
-    <div className={`glass rounded-[2rem] p-4 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-3 max-h-[35vh] sm:max-h-none ${isArrived ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.2)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 'border-white/5')}`}>
+    <div className={`glass rounded-[2rem] p-4 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-3 max-h-[35dvh] sm:max-h-none ${isArrived ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.2)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 'border-white/5')}`}>
       
       {/* Metrics Row */}
       <div className="flex justify-between items-start">
         <div className="flex gap-4">
            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5">Queue</span>
+              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5 italic">Queue</span>
               <span className="text-3xl font-black text-white mono leading-none">{dropsLeft}</span>
            </div>
            <div className="w-[1px] h-8 bg-white/10 self-center" />
            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5">Finish</span>
+              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5 italic">Finish</span>
               <span className="text-xl font-black text-red-500 mono leading-none">{etaFinish}</span>
            </div>
         </div>
@@ -108,7 +126,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               <Clock size={12} className="text-blue-500" />
               <span className="text-[10px] font-black text-blue-500 mono">{etaNext}</span>
            </div>
-           <span className="text-[8px] font-black text-zinc-600 uppercase tracking-tighter">Next Arrival Window</span>
+           <span className="text-[8px] font-black text-zinc-600 uppercase tracking-tighter italic">ETA Window</span>
         </div>
       </div>
 
@@ -117,11 +135,11 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="flex items-center justify-between mb-1.5">
            <div className="flex items-center gap-2">
               {isArrived ? <CheckCircle2 size={14} className="text-green-500 animate-pulse" /> : (isPathImpacted ? <AlertTriangle size={14} className="text-red-500" /> : <MapPin size={14} className="text-blue-500" />)}
-              <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isArrived ? 'text-green-500' : (isPathImpacted ? 'text-red-500' : 'text-zinc-500')}`}>
-                {isArrived ? 'Arrived at Stop' : (isPathImpacted ? 'Path Obstruction' : 'Active Waypoint')}
+              <span className={`text-[9px] font-black uppercase tracking-[0.2em] italic ${isArrived ? 'text-green-500' : (isPathImpacted ? 'text-red-500' : 'text-zinc-500')}`}>
+                {isArrived ? 'Detected at Stop' : (isPathImpacted ? 'Path Impacted' : 'Active Waypoint')}
               </span>
            </div>
-           <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest mono">Stop #{index + 1}</span>
+           <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest mono">Stop #{(nearbyStop?.actualIndex ?? index) + 1}</span>
         </div>
         
         <h2 className={`text-xl sm:text-2xl font-black truncate tracking-tighter italic ${isArrived ? 'text-white' : (isPathImpacted ? 'text-red-100' : 'text-blue-100')}`}>
@@ -131,10 +149,10 @@ const Dashboard: React.FC<DashboardProps> = ({
         {/* Mini Queue */}
         {queue.length > 0 && !isArrived && (
           <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-2 overflow-hidden">
-             <span className="text-[7px] font-black text-zinc-700 uppercase tracking-widest shrink-0">NEXT</span>
+             <span className="text-[7px] font-black text-zinc-700 uppercase tracking-widest shrink-0 italic">NEXT</span>
              {queue.map((s, idx) => (
                <div key={idx} className="flex items-center gap-2 shrink-0 max-w-[100px]">
-                  <span className="text-[9px] font-bold text-zinc-600 truncate">{s.addr}</span>
+                  <span className="text-[9px] font-bold text-zinc-600 truncate italic">{s.addr}</span>
                   {idx < queue.length - 1 && <ArrowRight size={8} className="text-zinc-800" />}
                </div>
              ))}
@@ -146,18 +164,18 @@ const Dashboard: React.FC<DashboardProps> = ({
       <div className="flex gap-3 h-14">
         <button 
           onClick={onBack}
-          className="flex-1 glass border-white/5 font-black text-[10px] rounded-xl active:scale-95 transition-all text-zinc-500 uppercase tracking-widest"
+          className="flex-1 glass border-white/5 font-black text-[10px] rounded-xl active:scale-95 transition-all text-zinc-500 uppercase tracking-widest italic"
         >
           Back
         </button>
         <button 
           onClick={onSkip}
-          className={`flex-[3] font-black text-lg rounded-xl active:scale-95 transition-all shadow-xl border-b-4 uppercase tracking-tighter flex items-center justify-center gap-3 ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}
+          className={`flex-[3] font-black text-lg rounded-xl active:scale-95 transition-all shadow-xl border-b-4 uppercase tracking-tighter italic flex items-center justify-center gap-3 ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}
         >
           {isArrived ? (
             <>
               <CheckCircle2 size={18} />
-              <span>Acknowledge</span>
+              <span>Stay to Confirm</span>
             </>
           ) : 'Skip Stop'}
         </button>

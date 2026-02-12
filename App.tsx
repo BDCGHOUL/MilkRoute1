@@ -6,9 +6,9 @@ import MapView from './components/MapView.tsx';
 import Dashboard from './components/Dashboard.tsx';
 import Overlay from './components/Overlay.tsx';
 import Calculator from './components/Calculator.tsx';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { 
-  Calculator as CalcIcon, Plus, Shield, Power, X, Lock,
+  Calculator as CalcIcon, Plus, Power, Lock,
   Construction, Zap, Loader2, Info, Sparkles, Navigation2
 } from 'lucide-react';
 
@@ -41,7 +41,6 @@ const App: React.FC = () => {
   const [stops, setStops] = useState<StopWithMeta[]>([]);
   const [routeType, setRouteType] = useState<RouteType>(RouteType.TOWN);
   const [lastPos, setLastPos] = useState<[number, number] | null>(null);
-  const [logicalPos, setLogicalPos] = useState<[number, number] | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [closures, setClosures] = useState<RoadClosure[]>([]);
   const [aiBriefing, setAiBriefing] = useState<{ text: string; strategy: string; sources: { title: string; uri: string }[] } | null>(null);
@@ -51,7 +50,9 @@ const App: React.FC = () => {
   // Arrival Logic States
   const [isArrived, setIsArrived] = useState(false);
   const [arrivalProgress, setArrivalProgress] = useState(0);
+  const [activeArrivalIndex, setActiveArrivalIndex] = useState<number | null>(null);
   const arrivalTimerRef = useRef<number | null>(null);
+  const startTimeRef = useRef<number | null>(null);
 
   // Form States
   const [newStopAddr, setNewStopAddr] = useState('');
@@ -87,45 +88,66 @@ const App: React.FC = () => {
     if (localStorage.getItem('adminSession') === 'active') setIsAdmin(true);
   }, []);
 
-  // Proximity Detection
+  // Complex Proximity and Arrival Logic
   useEffect(() => {
-    if (!isStarted || !lastPos || isArrived || index >= stops.length) return;
-    const target = stops[index];
-    const dist = getHaversineDist(lastPos[0], lastPos[1], target.lat, target.lng);
+    if (!isStarted || !lastPos || index >= stops.length) return;
 
-    if (dist < TRIGGER_DIST) {
-      setIsArrived(true);
-      setArrivalProgress(0);
-      
-      const duration = 10000; // 10 seconds
-      const interval = 100;
-      let elapsed = 0;
+    // Check if we are near ANY upcoming stop (current or future)
+    const nearbyIdx = stops.findIndex((s, i) => 
+      i >= index && getHaversineDist(lastPos[0], lastPos[1], s.lat, s.lng) < TRIGGER_DIST
+    );
 
-      arrivalTimerRef.current = window.setInterval(() => {
-        elapsed += interval;
-        const progress = (elapsed / duration) * 100;
-        setArrivalProgress(progress);
+    if (nearbyIdx !== -1) {
+      // We are near an upcoming stop
+      if (activeArrivalIndex !== nearbyIdx) {
+        // Just arrived or moved to a different stop
+        if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+        
+        setActiveArrivalIndex(nearbyIdx);
+        setIsArrived(true);
+        setArrivalProgress(0);
+        startTimeRef.current = Date.now();
 
-        if (elapsed >= duration) {
-          handleNextStop();
-        }
-      }, interval);
+        const duration = 10000; // 10s
+        const interval = 100;
+
+        arrivalTimerRef.current = window.setInterval(() => {
+          const now = Date.now();
+          const elapsed = now - (startTimeRef.current || now);
+          const progress = Math.min((elapsed / duration) * 100, 100);
+          setArrivalProgress(progress);
+
+          if (elapsed >= duration) {
+            handleStopCompleted(nearbyIdx);
+          }
+        }, interval);
+      }
+    } else {
+      // Not near any upcoming stop
+      if (isArrived) {
+        setIsArrived(false);
+        setActiveArrivalIndex(null);
+        setArrivalProgress(0);
+        if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+      }
     }
 
     return () => {
       if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
     };
-  }, [lastPos, isStarted, index, stops, isArrived]);
+  }, [lastPos, isStarted, index, stops, isArrived, activeArrivalIndex]);
 
-  const handleNextStop = () => {
+  const handleStopCompleted = (completedIdx: number) => {
     if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
     setIsArrived(false);
     setArrivalProgress(0);
-    setIndex(prev => Math.min(prev + 1, stops.length - 1));
+    setActiveArrivalIndex(null);
+    // Mark this stop AND all prior calls as finished by jumping index to next stop
+    setIndex(completedIdx + 1);
   };
 
   useEffect(() => {
-    if (!isStarted || !navigator.geolocation) return;
+    if (!isStarted || !navigator.mediaDevices) return;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => setLastPos([pos.coords.latitude, pos.coords.longitude]),
       (err) => console.error("GPS Error:", err),
@@ -148,29 +170,23 @@ const App: React.FC = () => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const currentRouteNames = stops.slice(index, index + 10).map(s => s.addr).join(', ');
       
-      // We try the search, but handle failure gracefully for GitHub environments
       let searchResponse;
       try {
         searchResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
-          contents: `URGENT: Analyze live road conditions in Cambridge UK. Focus: ${currentRouteNames}. Provide a "Best Route Strategy" section.`,
-          config: { 
-            tools: [{ googleSearch: {} }],
-            thinkingConfig: { thinkingBudget: 0 }
-          }
+          contents: `Analyze live road conditions in Cambridge UK. Focus: ${currentRouteNames}. Provide a "Best Route Strategy" section.`,
+          config: { tools: [{ googleSearch: {} }] }
         });
       } catch (searchErr) {
-        // Fallback Heuristic Strategy
         searchResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
-          contents: `Provide a hypothetical but tactical route strategy for a logistics driver in Cambridge UK (sector: ${routeType}) during nighttime. Mention likely congestion points and standard diversions.`,
-          config: { thinkingConfig: { thinkingBudget: 0 } }
+          contents: `Provide tactical route strategy for a logistics driver in Cambridge UK (${routeType}) at night. Mention potential hazards.`,
         });
       }
 
-      const fullText = searchResponse.text || "Direct intel unreachable. Using local heuristic data.";
+      const fullText = searchResponse.text || "Direct intel unreachable.";
       const strategyMatch = fullText.match(/Best Route Strategy:(.*)/si);
-      const strategyText = strategyMatch ? strategyMatch[1].trim() : "Proceed with caution. No diversions required based on current patterns.";
+      const strategyText = strategyMatch ? strategyMatch[1].trim() : "Standard routing suggested.";
       const reportText = fullText.split("Best Route Strategy:")[0].trim();
 
       setAiBriefing({ 
@@ -181,8 +197,8 @@ const App: React.FC = () => {
       });
     } catch (e) {
       setAiBriefing({ 
-        text: "System telemetry disconnected. Using driver-manual mode.", 
-        strategy: "Maintain visual confirmation. Monitor radio for emergency blockages.", 
+        text: "System telemetry interrupted.", 
+        strategy: "Maintain visual confirmation.", 
         sources: [] 
       });
     } finally {
@@ -252,7 +268,7 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Persistent Header */}
+      {/* Header */}
       <div className="flex justify-between items-center h-14 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-xl">
         <div className="flex flex-col">
           <span className="text-[9px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1">Logistics Core</span>
@@ -269,10 +285,10 @@ const App: React.FC = () => {
       <Dashboard 
         index={index} 
         stops={stops} 
-        lastPos={logicalPos || lastPos} 
+        lastPos={lastPos} 
         isArrived={isArrived} 
         arrivalProgress={arrivalProgress} 
-        onSkip={handleNextStop} 
+        onSkip={() => handleStopCompleted(index)} 
         onBack={() => setIndex(Math.max(0, index - 1))} 
         closures={closures} 
       />
@@ -282,7 +298,7 @@ const App: React.FC = () => {
           stops={stops} 
           index={index} 
           routeType={routeType} 
-          lastPos={logicalPos || lastPos} 
+          lastPos={lastPos} 
           isAdmin={isAdmin} 
           onStopsUpdate={(s) => { setStops(s as StopWithMeta[]); }} 
           closures={closures} 
@@ -295,15 +311,14 @@ const App: React.FC = () => {
           }} 
         />
         
-        {/* Floating crosshair if in closure mode */}
         {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-10 h-10 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse"><div className="w-1 h-1 bg-red-500 rounded-full"/></div></div>}
 
-        {/* Admin Floating Controls */}
+        {/* Admin floating controls */}
         {isAdmin && (
           <div className="absolute top-4 right-4 flex flex-col gap-3 z-[1000]">
             <button 
               onClick={() => setIsClosureMode(!isClosureMode)} 
-              className={`w-12 h-12 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110 shadow-red-500/50' : 'bg-black/80 backdrop-blur-md border-white/20'}`}
+              className={`w-12 h-12 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110' : 'bg-black/80 backdrop-blur-md border-white/20'}`}
             >
               <Construction size={22} className={isClosureMode ? 'animate-pulse' : 'text-zinc-400'} />
             </button>
@@ -316,7 +331,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Primary Action Deck */}
+        {/* Navigation Bottom Deck */}
         <div className="absolute bottom-4 left-4 right-4 flex gap-3 z-[1000]">
            <button 
              onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
@@ -343,7 +358,7 @@ const App: React.FC = () => {
                 <div className="bg-blue-600/20 p-4 rounded-2xl border border-blue-500/30"><Sparkles size={32} className="text-blue-500" /></div>
                 <div>
                   <h2 className="text-3xl font-black uppercase italic tracking-tighter text-white">Road Intel</h2>
-                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase">Autonomous Grid Scanning</p>
+                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase italic">Autonomous Grid Scanning</p>
                 </div>
              </div>
              {isBriefingLoading ? (
@@ -353,15 +368,15 @@ const App: React.FC = () => {
                     <Zap size={24} className="text-yellow-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                   </div>
                   <div className="text-center space-y-3">
-                    <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs">Parsing Grid Dynamics</p>
-                    <p className="text-zinc-600 font-bold text-[9px] uppercase tracking-widest italic">Syncing with traffic satellites...</p>
+                    <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs">Analyzing Infrastructure</p>
+                    <p className="text-zinc-600 font-bold text-[9px] uppercase tracking-widest">Cross-referencing satellite data...</p>
                   </div>
                </div>
              ) : (
                <>
                  <div className="flex-1 overflow-y-auto pr-3 no-scrollbar space-y-8 pb-4">
                    <div className="space-y-4">
-                      <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                      <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2 italic">
                         <div className="w-1.5 h-1.5 rounded-full bg-blue-500" /> System Report
                       </div>
                       <div className="text-lg font-medium text-zinc-200 leading-relaxed italic border-l-2 border-zinc-800 pl-5">
@@ -369,7 +384,7 @@ const App: React.FC = () => {
                       </div>
                    </div>
                    <div className="space-y-4">
-                      <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-2">
+                      <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-2 italic">
                          <Zap size={10} className="fill-blue-500 text-blue-500" /> Tactical Command
                       </div>
                       <div className="bg-blue-600/10 border border-blue-500/30 rounded-2xl p-6 text-blue-100 font-black text-xl italic tracking-tighter leading-tight shadow-xl">
@@ -436,10 +451,10 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-6 bg-black/95 backdrop-blur-lg">
           <div className="glass border-red-500/20 rounded-[2.5rem] p-10 w-full max-w-xs text-center shadow-2xl">
             <div className="bg-red-500/10 w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-red-500/20 text-red-500"><Power size={32} /></div>
-            <h2 className="text-3xl font-black text-white mb-2 uppercase italic">End Shift?</h2>
+            <h2 className="text-3xl font-black text-white mb-2 uppercase italic tracking-tighter">End Shift?</h2>
             <p className="text-zinc-500 font-medium mb-8 text-sm">Session will be terminated.</p>
             <div className="flex flex-col gap-3">
-              <button onClick={handleSignOut} className="w-full bg-red-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl active:scale-95 uppercase italic">End Now</button>
+              <button onClick={handleSignOut} className="w-full bg-red-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl active:scale-95 uppercase italic tracking-tighter">End Now</button>
               <button onClick={() => setActiveModal('NONE')} className="w-full bg-white/5 text-zinc-400 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
             </div>
           </div>
