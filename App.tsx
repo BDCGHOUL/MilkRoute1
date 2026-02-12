@@ -88,19 +88,19 @@ const App: React.FC = () => {
     if (localStorage.getItem('adminSession') === 'active') setIsAdmin(true);
   }, []);
 
-  // Complex Proximity and Arrival Logic
+  // Proximity Loop for Auto-Confirmation
   useEffect(() => {
     if (!isStarted || !lastPos || index >= stops.length) return;
 
-    // Check if we are near ANY upcoming stop (current or future)
+    // Check for ANY upcoming stop (current or any in the future)
     const nearbyIdx = stops.findIndex((s, i) => 
       i >= index && getHaversineDist(lastPos[0], lastPos[1], s.lat, s.lng) < TRIGGER_DIST
     );
 
     if (nearbyIdx !== -1) {
-      // We are near an upcoming stop
+      // We are within the 10m radius of a stop
       if (activeArrivalIndex !== nearbyIdx) {
-        // Just arrived or moved to a different stop
+        // Just arrived at this specific stop
         if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
         
         setActiveArrivalIndex(nearbyIdx);
@@ -108,7 +108,7 @@ const App: React.FC = () => {
         setArrivalProgress(0);
         startTimeRef.current = Date.now();
 
-        const duration = 10000; // 10s
+        const duration = 10000; // 10s countdown
         const interval = 100;
 
         arrivalTimerRef.current = window.setInterval(() => {
@@ -123,7 +123,7 @@ const App: React.FC = () => {
         }, interval);
       }
     } else {
-      // Not near any upcoming stop
+      // Left the area of all upcoming stops
       if (isArrived) {
         setIsArrived(false);
         setActiveArrivalIndex(null);
@@ -142,12 +142,12 @@ const App: React.FC = () => {
     setIsArrived(false);
     setArrivalProgress(0);
     setActiveArrivalIndex(null);
-    // Mark this stop AND all prior calls as finished by jumping index to next stop
+    // Mark this stop AND all prior calls as finished by jumping the index past it
     setIndex(completedIdx + 1);
   };
 
   useEffect(() => {
-    if (!isStarted || !navigator.mediaDevices) return;
+    if (!isStarted || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => setLastPos([pos.coords.latitude, pos.coords.longitude]),
       (err) => console.error("GPS Error:", err),
@@ -196,11 +196,7 @@ const App: React.FC = () => {
           .map((c: any) => c.web).filter(Boolean)
       });
     } catch (e) {
-      setAiBriefing({ 
-        text: "System telemetry interrupted.", 
-        strategy: "Maintain visual confirmation.", 
-        sources: [] 
-      });
+      setAiBriefing({ text: "System telemetry interrupted.", strategy: "Maintain visual confirmation.", sources: [] });
     } finally {
       setIsBriefingLoading(false);
     }
@@ -268,32 +264,34 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Header */}
-      <div className="flex justify-between items-center h-14 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-xl">
+      {/* Persistent App Header */}
+      <div className="flex justify-between items-center h-14 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-2xl">
         <div className="flex flex-col">
-          <span className="text-[9px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1">Logistics Core</span>
-          <span className="text-sm font-black mono text-zinc-200">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          <span className="text-[10px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1">Logistics Core</span>
+          <span className="text-sm font-black mono text-zinc-100 italic">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
-        <div className="flex gap-1.5 sm:gap-2">
+        <div className="flex gap-2">
             {isAdmin && <button onClick={() => setIsAdmin(false)} className="p-2.5 text-orange-500 bg-orange-500/10 rounded-xl border border-orange-500/20 active:scale-95"><Lock size={18} /></button>}
-            <button onClick={() => setShowCalc(true)} className="p-2.5 text-yellow-500 bg-yellow-500/10 rounded-xl border border-yellow-500/20 active:scale-95"><CalcIcon size={18} /></button>
+            <button onClick={() => setShowCalc(true)} className="p-2.5 text-yellow-400 bg-yellow-400/10 rounded-xl border border-yellow-400/20 active:scale-95 shadow-lg"><CalcIcon size={18} /></button>
             <button onClick={() => setActiveModal('BRIEFING')} className="p-2.5 text-blue-500 bg-blue-500/10 rounded-xl border border-blue-500/20 active:scale-95"><Info size={18} /></button>
             <button onClick={() => setActiveModal('SIGN_OUT_CONFIRM')} className="p-2.5 text-red-500 bg-red-500/10 rounded-xl border border-red-500/20 active:scale-95"><Power size={18} /></button>
         </div>
       </div>
 
+      {/* Main Stats and Active Waypoint Display */}
       <Dashboard 
         index={index} 
         stops={stops} 
         lastPos={lastPos} 
         isArrived={isArrived} 
         arrivalProgress={arrivalProgress} 
-        onSkip={() => handleStopCompleted(index)} 
+        onSkip={() => handleStopCompleted(activeArrivalIndex ?? index)} 
         onBack={() => setIndex(Math.max(0, index - 1))} 
         closures={closures} 
       />
 
-      <div className="flex-1 relative rounded-3xl overflow-hidden border border-zinc-800 bg-zinc-900 shadow-2xl min-h-0">
+      {/* Map Viewport */}
+      <div className="flex-1 relative rounded-[2rem] overflow-hidden border border-zinc-800 bg-zinc-950 shadow-inner min-h-0">
         <MapView 
           stops={stops} 
           index={index} 
@@ -311,40 +309,42 @@ const App: React.FC = () => {
           }} 
         />
         
-        {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-10 h-10 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse"><div className="w-1 h-1 bg-red-500 rounded-full"/></div></div>}
+        {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-12 h-12 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.5)]"><div className="w-1.5 h-1.5 bg-red-500 rounded-full"/></div></div>}
 
-        {/* Admin floating controls */}
+        {/* Admin Floating Controls */}
         {isAdmin && (
           <div className="absolute top-4 right-4 flex flex-col gap-3 z-[1000]">
             <button 
               onClick={() => setIsClosureMode(!isClosureMode)} 
-              className={`w-12 h-12 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110' : 'bg-black/80 backdrop-blur-md border-white/20'}`}
+              className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110 shadow-red-500/50' : 'bg-black/90 backdrop-blur-md border-white/20'}`}
+              title="Add Road Closure"
             >
-              <Construction size={22} className={isClosureMode ? 'animate-pulse' : 'text-zinc-400'} />
+              <Construction size={24} className={isClosureMode ? 'animate-pulse text-white' : 'text-zinc-400'} />
             </button>
             <button 
               onClick={() => setActiveModal('ADD_STOP')} 
-              className="w-12 h-12 bg-white text-black rounded-2xl flex items-center justify-center shadow-2xl active:scale-90 border-2 border-white/20"
+              className="w-14 h-14 bg-white text-black rounded-2xl flex items-center justify-center shadow-2xl active:scale-90 border-2 border-white/20"
+              title="Add Stop"
             >
-              <Plus size={26} />
+              <Plus size={28} strokeWidth={3} />
             </button>
           </div>
         )}
 
-        {/* Navigation Bottom Deck */}
-        <div className="absolute bottom-4 left-4 right-4 flex gap-3 z-[1000]">
+        {/* Tactical Actions */}
+        <div className="absolute bottom-6 left-6 right-6 flex gap-3 z-[1000]">
            <button 
              onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
-             className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800"
+             className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800 transition-transform"
            >
-             <Navigation2 size={22} fill="currentColor" />
+             <Navigation2 size={24} fill="currentColor" />
              Launch Navigation
            </button>
            <button 
              onClick={async () => { setIsOptimizing(true); await generateBriefing(); setIsOptimizing(false); }} 
-             className="px-6 bg-black/90 backdrop-blur-md border border-white/20 text-white h-16 rounded-2xl font-black text-[10px] flex items-center gap-2 shadow-xl active:scale-95 uppercase tracking-widest border-b-4 border-zinc-800"
+             className="px-6 bg-zinc-900/95 backdrop-blur-md border border-white/10 text-white h-16 rounded-2xl font-black text-[10px] flex items-center gap-2 shadow-xl active:scale-95 uppercase tracking-widest border-b-4 border-zinc-800"
            >
-             {isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={14} className="text-yellow-400" />} 
+             {isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} className="text-yellow-400" />} 
              AI Reroute
            </button>
         </div>
@@ -358,7 +358,7 @@ const App: React.FC = () => {
                 <div className="bg-blue-600/20 p-4 rounded-2xl border border-blue-500/30"><Sparkles size={32} className="text-blue-500" /></div>
                 <div>
                   <h2 className="text-3xl font-black uppercase italic tracking-tighter text-white">Road Intel</h2>
-                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase italic">Autonomous Grid Scanning</p>
+                  <p className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase italic leading-none">Autonomous Grid Scanning</p>
                 </div>
              </div>
              {isBriefingLoading ? (
@@ -368,8 +368,8 @@ const App: React.FC = () => {
                     <Zap size={24} className="text-yellow-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                   </div>
                   <div className="text-center space-y-3">
-                    <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs">Analyzing Infrastructure</p>
-                    <p className="text-zinc-600 font-bold text-[9px] uppercase tracking-widest">Cross-referencing satellite data...</p>
+                    <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs">Parsing Grid Dynamics</p>
+                    <p className="text-zinc-600 font-bold text-[9px] uppercase tracking-widest italic">Syncing with traffic satellites...</p>
                   </div>
                </div>
              ) : (
@@ -424,7 +424,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Add Closure Form */}
+      {/* Add Closure Modal */}
       {activeModal === 'ADD_CLOSURE_FORM' && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
           <div className="glass rounded-[2.5rem] p-8 w-full max-w-sm border-white/10 shadow-3xl">
@@ -446,13 +446,13 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Exit Modal */}
+      {/* End Shift Confirmation */}
       {activeModal === 'SIGN_OUT_CONFIRM' && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-6 bg-black/95 backdrop-blur-lg">
           <div className="glass border-red-500/20 rounded-[2.5rem] p-10 w-full max-w-xs text-center shadow-2xl">
             <div className="bg-red-500/10 w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-red-500/20 text-red-500"><Power size={32} /></div>
             <h2 className="text-3xl font-black text-white mb-2 uppercase italic tracking-tighter">End Shift?</h2>
-            <p className="text-zinc-500 font-medium mb-8 text-sm">Session will be terminated.</p>
+            <p className="text-zinc-500 font-medium mb-8 text-sm italic">Session and telemetry data will be purged.</p>
             <div className="flex flex-col gap-3">
               <button onClick={handleSignOut} className="w-full bg-red-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl active:scale-95 uppercase italic tracking-tighter">End Now</button>
               <button onClick={() => setActiveModal('NONE')} className="w-full bg-white/5 text-zinc-400 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
@@ -461,11 +461,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Admin Login */}
+      {/* Admin Unlock */}
       {activeModal === 'ADMIN_LOGIN' && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
           <div className="glass rounded-[2.5rem] p-10 w-full max-w-xs text-center border-white/10 shadow-3xl">
-            <h2 className="text-xl font-black uppercase tracking-[0.2em] text-zinc-500 mb-8">Access Key</h2>
+            <h2 className="text-xl font-black uppercase tracking-[0.2em] text-zinc-500 mb-8 italic">Access Key</h2>
             <form onSubmit={(e) => { e.preventDefault(); if(adminPassInput === "5371") { setIsAdmin(true); localStorage.setItem('adminSession', 'active'); setActiveModal('NONE'); setAdminPassInput(''); } else { setAdminPassInput(''); } }}>
               <input type="password" value={adminPassInput} onChange={(e) => setAdminPassInput(e.target.value)} className="w-full bg-black border-2 border-zinc-800 rounded-3xl py-6 text-center text-4xl font-black mb-8 mono focus:border-blue-500 outline-none shadow-inner" autoFocus />
               <button type="submit" className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest active:scale-95 shadow-xl">Connect Hub</button>
