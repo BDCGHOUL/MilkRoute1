@@ -82,7 +82,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     return () => clearInterval(timer);
   }, [index, stops, lastPos]);
 
-  // Proximity logic to find which stop the driver is currently at
   const getNearbyStop = () => {
     if (!lastPos) return null;
     const R = 6371e3;
@@ -103,6 +102,9 @@ const Dashboard: React.FC<DashboardProps> = ({
   const currentStop = isArrived && nearbyStop ? nearbyStop : stops[index];
   const queue = stops.slice(index + 1, index + 3);
   const dropsLeft = Math.max(0, stops.length - index);
+
+  // Calculate actual remaining seconds for UI
+  const remainingSeconds = Math.max(0, 10 - Math.floor(arrivalProgress / 10));
 
   return (
     <div className={`glass rounded-[2rem] p-5 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-4 shadow-2xl ${isArrived ? 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.3)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_50px_rgba(239,68,68,0.3)]' : 'border-white/5')}`}>
@@ -142,15 +144,13 @@ const Dashboard: React.FC<DashboardProps> = ({
            <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mono">Stop #{(nearbyStop?.actualIndex ?? index) + 1}</span>
         </div>
         
-        {/* HERO ADDRESS DISPLAY */}
         <h2 className={`text-2xl sm:text-3xl font-black tracking-tighter leading-tight italic truncate pr-4 ${isArrived ? 'text-white' : (isPathImpacted ? 'text-red-100' : 'text-blue-100')}`}>
           {currentStop ? currentStop.addr : 'ROUTE COMPLETE'}
         </h2>
 
-        {/* Dynamic Context Display */}
         {isArrived ? (
           <div className="mt-1 text-xs font-black text-green-500/70 uppercase tracking-widest italic animate-pulse">
-            Auto-Confirming in {(10 - (arrivalProgress / 10)).toFixed(0)}s
+            Auto-Confirming in {remainingSeconds}s
           </div>
         ) : (
           queue.length > 0 && (
