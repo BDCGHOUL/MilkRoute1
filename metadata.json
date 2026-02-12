@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Logistics Pro V6",
+  "description": "A high-performance, dark-mode logistics and route tracking application for professional drivers with real-time ETA, GPS tracking, and admin controls.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

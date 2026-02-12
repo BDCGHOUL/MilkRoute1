@@ -1,0 +1,208 @@
+
+import React, { useEffect, useRef } from 'react';
+import { Stop, RouteType, RoadClosure } from '../types';
+import L from 'leaflet';
+
+interface MapViewProps {
+  stops: Stop[];
+  index: number;
+  routeType: RouteType;
+  lastPos: [number, number] | null;
+  isAdmin: boolean;
+  onStopsUpdate: (stops: Stop[]) => void;
+  closures: RoadClosure[];
+  onMapClick?: (lat: number, lng: number) => void;
+}
+
+const MapView: React.FC<MapViewProps> = ({ 
+  stops, index, routeType, lastPos, isAdmin, onStopsUpdate, closures, onMapClick 
+}) => {
+  const mapRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<L.LayerGroup | null>(null);
+  const userMarkerRef = useRef<L.CircleMarker | null>(null);
+  const routeLineRef = useRef<L.Polyline | null>(null);
+  const closuresRef = useRef<L.LayerGroup | null>(null);
+  const onMapClickRef = useRef(onMapClick);
+
+  const lastRouteType = useRef<RouteType | null>(null);
+  const lastStopsCount = useRef<number>(0);
+
+  // Keep the latest callback ref available for the persistent Leaflet listener
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+  }, [onMapClick]);
+
+  useEffect(() => {
+    if (!mapRef.current) {
+      // Fix: Removed deprecated 'tap' property to resolve TypeScript error
+      mapRef.current = L.map('map', {
+        zoomControl: false,
+        attributionControl: false,
+        fadeAnimation: true
+      }).setView([52.23886, 0.18287], 13);
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 20
+      }).addTo(mapRef.current);
+      
+      markersRef.current = L.layerGroup().addTo(mapRef.current);
+      closuresRef.current = L.layerGroup().addTo(mapRef.current);
+      routeLineRef.current = L.polyline([], { color: '#3b82f6', weight: 4, opacity: 0.6, dashArray: '8, 8' }).addTo(mapRef.current);
+      
+      userMarkerRef.current = L.circleMarker([0, 0], {
+        radius: 8,
+        fillColor: '#ffffff',
+        color: '#3b82f6',
+        weight: 3,
+        fillOpacity: 1
+      }).addTo(mapRef.current);
+
+      // Persistent click listener that uses the dynamic ref
+      mapRef.current.on('click', (e) => {
+        if (onMapClickRef.current) {
+          onMapClickRef.current(e.latlng.lat, e.latlng.lng);
+        }
+      });
+    }
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mapRef.current || !markersRef.current || !closuresRef.current) return;
+    
+    markersRef.current.clearLayers();
+    stops.forEach((stop, i) => {
+      const isCurrent = i === index;
+      const isPast = i < index;
+      
+      // EXTREMELY HIGH VISIBILITY MARKERS FOR DRIVERS
+      const markerColor = isCurrent ? '#ef4444' : (isPast ? '#18181b' : '#3b82f6');
+      const markerSize = isCurrent ? 36 : 24;
+      
+      const markerHtml = `
+        <div class="relative flex items-center justify-center">
+          ${isCurrent ? '<div class="absolute w-12 h-12 bg-red-600/30 rounded-full animate-ping"></div>' : ''}
+          <div class="rounded-full border-2 border-white flex items-center justify-center shadow-2xl transition-all duration-300" 
+               style="background-color: ${markerColor}; width: ${markerSize}px; height: ${markerSize}px;">
+             <span class="text-[10px] font-black text-white italic">${i + 1}</span>
+          </div>
+        </div>
+      `;
+
+      const marker = isAdmin ? 
+        L.marker([stop.lat, stop.lng], { 
+          draggable: true,
+          icon: L.divIcon({ html: markerHtml, className: 'call-icon', iconSize: [40, 40], iconAnchor: [20, 20] }) 
+        }).on('dragend', (e: any) => {
+          const newStops = [...stops];
+          newStops[i] = { ...newStops[i], lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng };
+          onStopsUpdate(newStops);
+        }) : 
+        L.marker([stop.lat, stop.lng], {
+          icon: L.divIcon({ html: markerHtml, className: 'call-icon', iconSize: [40, 40], iconAnchor: [20, 20] })
+        });
+      
+      marker.bindTooltip(`
+        <div class="bg-black border border-white/20 px-3 py-1.5 rounded-xl shadow-2xl">
+          <span class="text-[11px] font-black uppercase text-white italic tracking-tighter">${stop.addr}</span>
+        </div>
+      `, { 
+        permanent: isCurrent, 
+        direction: 'top',
+        className: 'custom-tooltip-v2',
+        offset: [0, -10]
+      }).addTo(markersRef.current!);
+    });
+
+    closuresRef.current.clearLayers();
+    const today = new Date().toISOString().split('T')[0];
+    
+    closures.forEach(c => {
+      if (today >= c.startDate && today <= c.endDate) {
+        L.circle([c.lat, c.lng], {
+          radius: 100,
+          color: '#ef4444',
+          fillColor: '#ef4444',
+          fillOpacity: 0.25,
+          weight: 3,
+          dashArray: '10, 5'
+        }).addTo(closuresRef.current!);
+        
+        L.marker([c.lat, c.lng], {
+          icon: L.divIcon({
+            html: `<div class="bg-red-600 border-2 border-white rounded-xl p-1.5 flex items-center justify-center text-white shadow-2xl pulse-accent"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="3" fill="none"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg></div>`,
+            className: 'closure-icon',
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+          })
+        }).bindPopup(`<div class="bg-zinc-900 border border-red-500 p-2 text-white font-black uppercase text-[10px] italic">BLOCKAGE: ${c.note || 'MAINTENANCE'}</div>`).addTo(closuresRef.current!);
+      }
+    });
+  }, [stops, index, isAdmin, onStopsUpdate, closures]);
+
+  useEffect(() => {
+    if (!mapRef.current || stops.length === 0) return;
+    if (routeType !== lastRouteType.current || stops.length !== lastStopsCount.current) {
+      const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lng]));
+      if (lastPos) bounds.extend(lastPos);
+      mapRef.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+      lastRouteType.current = routeType;
+      lastStopsCount.current = stops.length;
+    }
+  }, [stops.length, routeType, lastPos]);
+
+  useEffect(() => {
+    if (!mapRef.current || !lastPos || !userMarkerRef.current) return;
+    userMarkerRef.current.setLatLng(lastPos);
+    
+    const currentStop = stops[index];
+    if (currentStop) {
+      const fetchRoute = async () => {
+        try {
+          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${lastPos[1]},${lastPos[0]};${currentStop.lng},${currentStop.lat}?overview=full&geometries=geojson`);
+          if (!res.ok) throw new Error("API Limit");
+          const data = await res.json();
+          if (data.routes?.[0]?.geometry) {
+            const coords = data.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
+            let compromised = false;
+            const today = new Date().toISOString().split('T')[0];
+            
+            for (const p of coords) {
+              for (const c of closures) {
+                if (today >= c.startDate && today <= c.endDate) {
+                   const d = L.latLng(p[0], p[1]).distanceTo(L.latLng(c.lat, c.lng));
+                   if (d < 100) compromised = true;
+                }
+              }
+            }
+            routeLineRef.current?.setLatLngs(coords);
+            routeLineRef.current?.setStyle({ color: compromised ? '#ef4444' : '#3b82f6', dashArray: compromised ? '5, 5' : '8, 8', weight: compromised ? 7 : 5, opacity: compromised ? 0.9 : 0.7 });
+          }
+        } catch (e) {
+          const directCoords: [number, number][] = [[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]];
+          let compromised = false;
+          const today = new Date().toISOString().split('T')[0];
+          for (const c of closures) {
+            if (today >= c.startDate && today <= c.endDate) {
+              const dToDest = L.latLng(currentStop.lat, currentStop.lng).distanceTo(L.latLng(c.lat, c.lng));
+              if (dToDest < 150) compromised = true;
+            }
+          }
+          routeLineRef.current?.setLatLngs(directCoords);
+          routeLineRef.current?.setStyle({ color: compromised ? '#ef4444' : '#3b82f6', dashArray: '4, 8', weight: 4 });
+        }
+      };
+      fetchRoute();
+    }
+  }, [lastPos, index, stops, closures]);
+
+  return <div id="map" className="w-full h-full z-0 cursor-crosshair" />;
+};
+
+export default MapView;
