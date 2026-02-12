@@ -51,7 +51,6 @@ const MapView: React.FC<MapViewProps> = ({
       if (onMapClickRef.current) onMapClickRef.current(e.latlng.lat, e.latlng.lng);
     });
 
-    // Solve "glitchy" map by responding to container resizes
     const observer = new ResizeObserver(() => {
       if (mapRef.current) mapRef.current.invalidateSize();
     });
@@ -122,6 +121,15 @@ const MapView: React.FC<MapViewProps> = ({
     userMarkerRef.current.setLatLng(lastPos);
     const currentStop = stops[index];
     if (currentStop) {
+      // AUTO ZOOM LOGIC: Fit map to both user and current waypoint
+      const bounds = L.latLngBounds([lastPos, [currentStop.lat, currentStop.lng]]);
+      mapRef.current.fitBounds(bounds, { 
+        padding: [80, 80], 
+        maxZoom: 17,
+        animate: true,
+        duration: 0.8
+      });
+
       const fetchRoute = async () => {
         try {
           const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${lastPos[1]},${lastPos[0]};${currentStop.lng},${currentStop.lat}?overview=full&geometries=geojson`);

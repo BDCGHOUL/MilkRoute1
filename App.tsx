@@ -85,10 +85,9 @@ const App: React.FC = () => {
 
     const savedClosures = localStorage.getItem('log_nav_closures');
     if (savedClosures) setClosures(JSON.parse(savedClosures));
-    // Persistence for admin is disabled for security/request
   }, []);
 
-  // Proximity Loop - Decoupled Timer
+  // Proximity Check - Separate from Timer to avoid resets on every GPS update
   useEffect(() => {
     if (!isStarted || !lastPos || index >= stops.length) return;
 
@@ -98,47 +97,51 @@ const App: React.FC = () => {
 
     if (nearbyIdx !== -1) {
       if (activeArrivalIndex !== nearbyIdx) {
-        // Just arrived at a new stop
         setActiveArrivalIndex(nearbyIdx);
         setIsArrived(true);
-        setArrivalProgress(0);
-        startTimeRef.current = Date.now();
-
-        if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
-        
-        arrivalTimerRef.current = window.setInterval(() => {
-          const now = Date.now();
-          const elapsed = now - (startTimeRef.current || now);
-          const progress = Math.min((elapsed / 10000) * 100, 100);
-          setArrivalProgress(progress);
-
-          if (elapsed >= 10000) {
-            handleStopCompleted(nearbyIdx);
-          }
-        }, 100);
       }
     } else {
-      // Driver left the area - kill timer
       if (isArrived) {
         setIsArrived(false);
         setActiveArrivalIndex(null);
-        setArrivalProgress(0);
-        if (arrivalTimerRef.current) {
-          clearInterval(arrivalTimerRef.current);
-          arrivalTimerRef.current = null;
-        }
       }
     }
+  }, [lastPos, isStarted, index, stops, isArrived, activeArrivalIndex]);
 
-    // NOTE: We do NOT clear the interval here in the cleanup to prevent resets on GPS jitter.
-    // We only clear it when the logic explicitly dictates (left area or finished).
-  }, [lastPos, isStarted, index]);
+  // Timer Effect - Only reacts when activeArrivalIndex changes
+  useEffect(() => {
+    if (activeArrivalIndex === null) {
+      setArrivalProgress(0);
+      if (arrivalTimerRef.current) {
+        clearInterval(arrivalTimerRef.current);
+        arrivalTimerRef.current = null;
+      }
+      return;
+    }
+
+    startTimeRef.current = Date.now();
+    setArrivalProgress(0);
+
+    arrivalTimerRef.current = window.setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - (startTimeRef.current || now);
+      const progress = Math.min((elapsed / 10000) * 100, 100);
+      setArrivalProgress(progress);
+
+      if (elapsed >= 10000) {
+        handleStopCompleted(activeArrivalIndex);
+      }
+    }, 100);
+
+    return () => {
+      if (arrivalTimerRef.current) {
+        clearInterval(arrivalTimerRef.current);
+        arrivalTimerRef.current = null;
+      }
+    };
+  }, [activeArrivalIndex]);
 
   const handleStopCompleted = (completedIdx: number) => {
-    if (arrivalTimerRef.current) {
-      clearInterval(arrivalTimerRef.current);
-      arrivalTimerRef.current = null;
-    }
     setIsArrived(false);
     setArrivalProgress(0);
     setActiveArrivalIndex(null);
@@ -179,7 +182,7 @@ const App: React.FC = () => {
       } catch (searchErr) {
         searchResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
-          contents: `Provide tactical route strategy for a logistics driver in Cambridge UK (${routeType}) at night. Mention potential hazards.`,
+          contents: `Provide tactical route strategy for a logistics driver in Cambridge UK (${routeType}) at night.`,
         });
       }
 
@@ -251,9 +254,9 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-black items-center overflow-hidden">
-      {/* Mobile-centric centered container for all screen sizes */}
-      <div className="flex flex-col h-full w-full max-w-[500px] bg-black text-white p-2 sm:p-3 gap-2 sm:gap-3 relative shadow-[0_0_100px_rgba(0,0,0,1)] border-x border-zinc-900/50">
+    <div className="flex flex-col h-full w-full bg-[#050505] items-center overflow-hidden">
+      {/* Optimized Desktop container - centering the mobile-first tactical UI */}
+      <div className="flex flex-col h-full w-full max-w-[550px] bg-black text-white p-2 sm:p-4 gap-2 sm:gap-4 relative shadow-[0_0_150px_rgba(0,0,0,1)] border-x border-white/5">
         
         {!isStarted && (
           <Overlay 
@@ -266,21 +269,20 @@ const App: React.FC = () => {
           />
         )}
 
-        {/* Persistent App Header */}
-        <div className="flex justify-between items-center h-14 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-2xl">
+        {/* Header */}
+        <div className="flex justify-between items-center h-16 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-xl">
           <div className="flex flex-col">
-            <span className="text-[10px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1">Logistics Core</span>
+            <span className="text-[10px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1 italic">Logistics Core</span>
             <span className="text-sm font-black mono text-zinc-100 italic">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           <div className="flex gap-2">
-              {isAdmin && <button onClick={() => setIsAdmin(false)} className="p-2.5 text-orange-500 bg-orange-500/10 rounded-xl border border-orange-500/20 active:scale-95"><Lock size={18} /></button>}
-              <button onClick={() => setShowCalc(true)} className="p-2.5 text-yellow-400 bg-yellow-400/10 rounded-xl border border-yellow-400/20 active:scale-95 shadow-lg"><CalcIcon size={18} /></button>
-              <button onClick={() => setActiveModal('BRIEFING')} className="p-2.5 text-blue-500 bg-blue-500/10 rounded-xl border border-blue-500/20 active:scale-95"><Info size={18} /></button>
-              <button onClick={() => setActiveModal('SIGN_OUT_CONFIRM')} className="p-2.5 text-red-500 bg-red-500/10 rounded-xl border border-red-500/20 active:scale-95"><Power size={18} /></button>
+              {isAdmin && <button onClick={() => setIsAdmin(false)} className="p-3 text-orange-500 bg-orange-500/10 rounded-xl border border-orange-500/20 active:scale-95"><Lock size={20} /></button>}
+              <button onClick={() => setShowCalc(true)} className="p-3 text-yellow-400 bg-yellow-400/10 rounded-xl border border-yellow-400/20 active:scale-95 shadow-lg"><CalcIcon size={20} /></button>
+              <button onClick={() => setActiveModal('BRIEFING')} className="p-3 text-blue-500 bg-blue-500/10 rounded-xl border border-blue-500/20 active:scale-95"><Info size={20} /></button>
+              <button onClick={() => setActiveModal('SIGN_OUT_CONFIRM')} className="p-3 text-red-500 bg-red-500/10 rounded-xl border border-red-500/20 active:scale-95"><Power size={20} /></button>
           </div>
         </div>
 
-        {/* Main Stats and Active Waypoint Display */}
         <Dashboard 
           index={index} 
           stops={stops} 
@@ -292,8 +294,7 @@ const App: React.FC = () => {
           closures={closures} 
         />
 
-        {/* Map Viewport - Uses Flex Grow to fill space without pushing content */}
-        <div className="flex-1 relative rounded-[2rem] overflow-hidden border border-zinc-800 bg-zinc-950 shadow-inner min-h-0">
+        <div className="flex-1 relative rounded-[2.5rem] overflow-hidden border border-zinc-800 bg-zinc-950 shadow-inner min-h-0">
           <MapView 
             stops={stops} 
             index={index} 
@@ -311,51 +312,46 @@ const App: React.FC = () => {
             }} 
           />
           
-          {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-12 h-12 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.5)]"><div className="w-1.5 h-1.5 bg-red-500 rounded-full"/></div></div>}
+          {isClosureMode && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[500]"><div className="w-14 h-14 border-2 border-red-500 rounded-full flex items-center justify-center animate-pulse shadow-[0_0_30px_rgba(239,68,68,0.4)]"><div className="w-2 h-2 bg-red-500 rounded-full"/></div></div>}
 
-          {/* Admin Floating Controls */}
           {isAdmin && (
-            <div className="absolute top-4 right-4 flex flex-col gap-3 z-[1000]">
+            <div className="absolute top-6 right-6 flex flex-col gap-4 z-[1000]">
               <button 
                 onClick={() => setIsClosureMode(!isClosureMode)} 
-                className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110 shadow-red-500/50' : 'bg-black/90 backdrop-blur-md border-white/20'}`}
-                title="Add Road Closure"
+                className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center shadow-2xl transition-all ${isClosureMode ? 'bg-red-600 border-white scale-110' : 'bg-black/90 backdrop-blur-md border-white/20'}`}
               >
                 <Construction size={24} className={isClosureMode ? 'animate-pulse text-white' : 'text-zinc-400'} />
               </button>
               <button 
                 onClick={() => setActiveModal('ADD_STOP')} 
                 className="w-14 h-14 bg-white text-black rounded-2xl flex items-center justify-center shadow-2xl active:scale-90 border-2 border-white/20"
-                title="Add Stop"
               >
-                <Plus size={28} strokeWidth={3} />
+                <Plus size={28} />
               </button>
             </div>
           )}
 
-          {/* Tactical Actions */}
-          <div className="absolute bottom-6 left-6 right-6 flex gap-3 z-[1000]">
-            <button 
-              onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
-              className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800 transition-transform"
-            >
-              <Navigation2 size={24} fill="currentColor" />
-              Launch Navigation
-            </button>
-            <button 
-              onClick={async () => { setIsOptimizing(true); await generateBriefing(); setIsOptimizing(false); }} 
-              className="px-6 bg-zinc-900/95 backdrop-blur-md border border-white/10 text-white h-16 rounded-2xl font-black text-[10px] flex items-center gap-2 shadow-xl active:scale-95 uppercase tracking-widest border-b-4 border-zinc-800"
-            >
-              {isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} className="text-yellow-400" />} 
-              AI Reroute
-            </button>
+          <div className="absolute bottom-6 left-6 right-6 flex gap-4 z-[1000]">
+             <button 
+               onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
+               className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800"
+             >
+               <Navigation2 size={24} fill="currentColor" />
+               Launch Navigation
+             </button>
+             <button 
+               onClick={async () => { setIsOptimizing(true); await generateBriefing(); setIsOptimizing(false); }} 
+               className="px-6 bg-zinc-900/95 backdrop-blur-md border border-white/10 text-white h-16 rounded-2xl font-black text-[10px] flex items-center gap-2 shadow-xl active:scale-95 uppercase tracking-widest border-b-4 border-zinc-800"
+             >
+               {isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} className="text-yellow-400" />} 
+               AI Reroute
+             </button>
           </div>
         </div>
 
-        {/* Modals... (No changes needed to existing modal code, but keeping the structure) */}
         {activeModal === 'BRIEFING' && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/95 backdrop-blur-3xl">
-            <div className="glass border-blue-500/20 rounded-[2.5rem] p-8 sm:p-10 w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] relative overflow-hidden">
+            <div className="glass border-blue-500/20 rounded-[2.5rem] p-10 w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] relative overflow-hidden">
                <div className="flex items-center gap-4 mb-6 shrink-0">
                   <div className="bg-blue-600/20 p-4 rounded-2xl border border-blue-500/30"><Sparkles size={32} className="text-blue-500" /></div>
                   <div>
@@ -370,8 +366,7 @@ const App: React.FC = () => {
                       <Zap size={24} className="text-yellow-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                     </div>
                     <div className="text-center space-y-3">
-                      <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs">Parsing Grid Dynamics</p>
-                      <p className="text-zinc-600 font-bold text-[9px] uppercase tracking-widest italic">Syncing with traffic satellites...</p>
+                      <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs italic">Syncing Grid States</p>
                     </div>
                  </div>
                ) : (
@@ -399,63 +394,6 @@ const App: React.FC = () => {
                    </div>
                  </>
                )}
-            </div>
-          </div>
-        )}
-
-        {activeModal === 'ADD_STOP' && (
-          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <div className="glass rounded-[2.5rem] p-8 w-full max-w-sm border-white/10 shadow-3xl">
-              <h2 className="text-2xl font-black uppercase italic text-white mb-6 flex items-center gap-3"><Plus className="text-blue-500" /> Add Stop</h2>
-              <form onSubmit={handleAddStop} className="space-y-4">
-                <input 
-                  type="text" 
-                  value={newStopAddr} 
-                  onChange={(e) => setNewStopAddr(e.target.value)} 
-                  placeholder="ADDRESS"
-                  className="w-full bg-black border-2 border-zinc-800 rounded-2xl py-5 px-6 text-xl font-bold text-white outline-none focus:border-blue-500"
-                  autoFocus
-                />
-                <div className="flex gap-3 pt-2">
-                  <button type="button" onClick={() => setActiveModal('NONE')} className="flex-1 bg-zinc-900 text-zinc-400 py-5 rounded-2xl font-black uppercase text-xs">Cancel</button>
-                  <button type="submit" className="flex-[2] bg-blue-600 text-white py-5 rounded-2xl font-black uppercase text-sm shadow-lg active:scale-95">Add Now</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {activeModal === 'ADD_CLOSURE_FORM' && (
-          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <div className="glass rounded-[2.5rem] p-8 w-full max-w-sm border-white/10 shadow-3xl">
-              <h2 className="text-2xl font-black uppercase italic text-red-500 mb-6 flex items-center gap-3"><Construction className="text-red-500" /> Mark Blockage</h2>
-              <form onSubmit={handleAddClosure} className="space-y-4">
-                <textarea 
-                  value={newClosureNote} 
-                  onChange={(e) => setNewClosureNote(e.target.value)} 
-                  placeholder="REASON"
-                  className="w-full bg-black border-2 border-zinc-800 rounded-2xl py-4 px-6 text-sm font-bold text-white outline-none focus:border-red-500 h-24"
-                  autoFocus
-                />
-                <div className="flex gap-3">
-                  <button type="button" onClick={() => setActiveModal('NONE')} className="flex-1 bg-zinc-900 text-zinc-400 py-5 rounded-2xl font-black uppercase text-xs">Abort</button>
-                  <button type="submit" className="flex-[2] bg-red-600 text-white py-5 rounded-2xl font-black uppercase text-sm shadow-lg active:scale-95">Set Hazard</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {activeModal === 'SIGN_OUT_CONFIRM' && (
-          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-6 bg-black/95 backdrop-blur-lg">
-            <div className="glass border-red-500/20 rounded-[2.5rem] p-10 w-full max-w-xs text-center shadow-2xl">
-              <div className="bg-red-500/10 w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-red-500/20 text-red-500"><Power size={32} /></div>
-              <h2 className="text-3xl font-black text-white mb-2 uppercase italic tracking-tighter">End Shift?</h2>
-              <p className="text-zinc-500 font-medium mb-8 text-sm italic">Session and telemetry data will be purged.</p>
-              <div className="flex flex-col gap-3">
-                <button onClick={handleSignOut} className="w-full bg-red-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl active:scale-95 uppercase italic tracking-tighter">End Now</button>
-                <button onClick={() => setActiveModal('NONE')} className="w-full bg-white/5 text-zinc-400 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
-              </div>
             </div>
           </div>
         )}
