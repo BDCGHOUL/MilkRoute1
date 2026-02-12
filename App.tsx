@@ -25,7 +25,6 @@ const App: React.FC = () => {
   const [isClosureMode, setIsClosureMode] = useState(false);
   const [activeModal, setActiveModal] = useState<ModalState>('NONE');
   const [adminPassInput, setAdminPassInput] = useState('');
-  const [newStopName, setNewStopName] = useState('');
   const [index, setIndex] = useState(0);
   const [stops, setStops] = useState<StopWithMeta[]>([]);
   const [routeType, setRouteType] = useState<RouteType>(RouteType.TOWN);
@@ -42,7 +41,7 @@ const App: React.FC = () => {
   const [tempClosurePos, setTempClosurePos] = useState<[number, number] | null>(null);
   const [closureDates, setClosureDates] = useState({ start: '', end: '', note: '' });
 
-  const [aiBriefing, setAiBriefing] = useState<{ text: string; sources: { title: string; uri: string }[] } | null>(null);
+  const [aiBriefing, setAiBriefing] = useState<{ text: string; strategy: string; sources: { title: string; uri: string }[] } | null>(null);
   const [isBriefingLoading, setIsBriefingLoading] = useState(false);
 
   const dwellTimerRef = useRef<number | null>(null);
@@ -106,27 +105,31 @@ const App: React.FC = () => {
     setActiveModal('BRIEFING');
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const currentRouteStops = stops.slice(index, index + 15);
+      const currentRouteStops = stops.slice(index, index + 20);
       const streetNames = currentRouteStops.map(s => s.addr).join(', ');
       
       const searchResponse = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Research road closures and heavy traffic in Cambridge tonight. 
-        Focus strictly on: ${streetNames}. 
-        Provide a concise driver briefing. Include specific "Route Strategy" advice (e.g. skip a call, or specific approach directions).`,
+        contents: `Search for live road closures and major traffic disruptions in Cambridge UK tonight. 
+        Analyze the impact on these specific streets: ${streetNames}. 
+        Provide a summary of the road conditions AND a section titled "Best Route Strategy" with specific advice on how to handle the route efficiently (e.g. skip a call, or specific directions).`,
         config: { tools: [{ googleSearch: {} }] }
       });
 
-      const briefingText = searchResponse.text || "No major reports found for your route.";
+      const fullText = searchResponse.text || "No major reports found.";
+      const strategyMatch = fullText.match(/Best Route Strategy:(.*)/si);
+      const strategyText = strategyMatch ? strategyMatch[1].trim() : "Maintain standard sequence.";
+      const reportText = fullText.split("Best Route Strategy:")[0].trim();
+
       const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const sources = groundingChunks.map((c: any) => c.web).filter(Boolean).map((w: any) => ({ title: w.title, uri: w.uri }));
 
-      // Auto-Mark Closures
+      // Auto-Marking Logic
       const parserResponse = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Extract coordinates of blocked streets from this report: "${briefingText}". 
-        STOPS: ${JSON.stringify(currentRouteStops.map(s => ({ addr: s.addr, lat: s.lat, lng: s.lng })))}
-        Return a JSON array of {lat, lng, note}.`,
+        contents: `Identify any coordinates of blocked streets from this report: "${fullText}". 
+        STOPS LIST: ${JSON.stringify(currentRouteStops.map(s => ({ addr: s.addr, lat: s.lat, lng: s.lng })))}
+        Return a JSON array of {lat, lng, note} describing ONLY the actual blockages found.`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -144,24 +147,26 @@ const App: React.FC = () => {
         }
       });
 
-      let detected = JSON.parse(parserResponse.text.trim());
+      let detected = [];
+      try { detected = JSON.parse(parserResponse.text.trim()); } catch (e) {}
+
       if (detected.length > 0) {
         const today = new Date().toISOString().split('T')[0];
-        const newC: RoadClosure[] = detected.map(dc => ({
+        const newClosures: RoadClosure[] = detected.map(dc => ({
           id: 'ai-' + Math.random().toString(36).substr(2, 9),
           lat: dc.lat,
           lng: dc.lng,
           radius: 150,
           startDate: today,
           endDate: today,
-          note: `INTEL: ${dc.note}`
+          note: `INTEL DETECTED: ${dc.note}`
         }));
-        setClosures(prev => [...prev.filter(p => !newC.some(n => Math.abs(n.lat - p.lat) < 0.0001)), ...newC]);
+        setClosures(prev => [...prev.filter(p => !newClosures.some(n => Math.abs(n.lat - p.lat) < 0.0001)), ...newClosures]);
       }
 
-      setAiBriefing({ text: briefingText, sources });
+      setAiBriefing({ text: reportText, strategy: strategyText, sources });
     } catch (e) {
-      setAiBriefing({ text: "Briefing system offline. Check manual road reports.", sources: [] });
+      setAiBriefing({ text: "Intel system timed out. Proceed with caution.", strategy: "Verify route manually.", sources: [] });
     } finally {
       setIsBriefingLoading(false);
     }
@@ -178,38 +183,29 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSkip = () => {
-    setIndex(prev => {
-      const next = Math.min(stops.length - 1, prev + 1);
-      localStorage.setItem('log_nav_idx', next.toString());
-      return next;
-    });
-  };
-
   return (
     <div className="flex flex-col h-full w-full bg-black text-white overflow-hidden p-3 gap-3 relative">
       {!isStarted && <Overlay routeType={routeType} onStart={() => setIsStarted(true)} resumeIndex={index} isAdmin={isAdmin} onAdminToggle={() => isAdmin ? (setIsAdmin(false), localStorage.removeItem('adminSession')) : setActiveModal('ADMIN_LOGIN')} onBriefing={generateBriefing} />}
 
-      {/* Main UI */}
       <div className="flex justify-between items-center h-14 shrink-0 px-3 z-[50] glass rounded-2xl">
         <div className="flex flex-col">
-          <span className="text-[9px] uppercase tracking-[0.4em] text-blue-500 font-black leading-none">Logistics Pro V6</span>
+          <span className="text-[9px] uppercase tracking-[0.4em] text-blue-500 font-black">LOGISTICS PRO V6</span>
           <span className="text-sm font-black mono mt-1">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
         <div className="flex gap-4">
-            <button onClick={() => setActiveModal('BRIEFING')} className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"><Info size={18} /></button>
-            <button onClick={() => setActiveModal('SIGN_OUT_CONFIRM')} className="p-2 text-red-500 active:scale-95 transition-all"><Power size={20} /></button>
+            <button onClick={() => setActiveModal('BRIEFING')} className="p-2 text-zinc-500 hover:text-blue-400"><Info size={20} /></button>
+            <button onClick={() => setActiveModal('SIGN_OUT_CONFIRM')} className="p-2 text-red-500"><Power size={20} /></button>
         </div>
       </div>
 
-      <Dashboard index={index} stops={stops} lastPos={logicalPos || lastPos} isArrived={isArrived} arrivalProgress={arrivalProgress} onSkip={handleSkip} onBack={() => setIndex(Math.max(0, index - 1))} closures={closures} />
+      <Dashboard index={index} stops={stops} lastPos={logicalPos || lastPos} isArrived={isArrived} arrivalProgress={arrivalProgress} onSkip={() => setIndex(prev => prev + 1)} onBack={() => setIndex(Math.max(0, index - 1))} closures={closures} />
 
       <div className="flex-1 relative rounded-3xl overflow-hidden border border-zinc-800 bg-zinc-900 shadow-2xl">
         <MapView stops={stops} index={index} routeType={routeType} lastPos={logicalPos || lastPos} isAdmin={isAdmin} onStopsUpdate={(s) => setStops(s as StopWithMeta[])} closures={closures} onMapClick={(lat, lng) => { if(isAdmin && isClosureMode) { setTempClosurePos([lat, lng]); setActiveModal('ADD_CLOSURE_FORM'); setIsClosureMode(false); } }} />
         
         <div className="absolute top-6 right-6 flex flex-col gap-3 z-[1000] items-end">
-           <button onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-sm pulse-accent shadow-2xl active:scale-95">START NAV</button>
-           <button onClick={async () => { setIsOptimizing(true); await new Promise(r => setTimeout(r, 800)); setIsOptimizing(false); }} className="px-8 py-4 bg-zinc-900 border border-zinc-700 rounded-2xl font-black text-xs flex items-center gap-2 shadow-xl active:scale-95">{isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} className="text-yellow-400" />} RE-ROUTE</button>
+           <button onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-sm pulse-accent shadow-2xl active:scale-95">LAUNCH NAV</button>
+           <button onClick={async () => { setIsOptimizing(true); await new Promise(r => setTimeout(r, 800)); setIsOptimizing(false); }} className="px-8 py-4 bg-zinc-900 border border-zinc-700 rounded-2xl font-black text-xs flex items-center gap-2 shadow-xl active:scale-95">{isOptimizing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} className="text-yellow-400" />} AI RE-ROUTE</button>
         </div>
       </div>
 
@@ -220,7 +216,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* SCROLLABLE AI BRIEFING MODAL */}
+      {/* ROAD INTEL SCROLLABLE MODAL */}
       {activeModal === 'BRIEFING' && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-6 bg-black/95 backdrop-blur-xl">
           <div className="glass border-blue-500/20 rounded-[2.5rem] p-10 w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] relative overflow-hidden">
@@ -233,28 +229,40 @@ const App: React.FC = () => {
              {isBriefingLoading ? (
                <div className="flex flex-col items-center py-20 gap-6 grow justify-center">
                   <Loader2 size={48} className="text-blue-500 animate-spin" />
-                  <p className="text-zinc-500 font-black uppercase tracking-[0.2em] text-[10px] animate-pulse">Scanning Cambridgeshire Control...</p>
+                  <p className="text-zinc-500 font-black uppercase tracking-[0.2em] text-[10px] animate-pulse">Scanning Infrastructure Feeds...</p>
                </div>
              ) : (
                <>
-                 {/* This is the new scroll feature */}
                  <div className="flex-1 overflow-y-auto pr-2 no-scrollbar space-y-8">
-                   <div className="text-lg font-medium text-zinc-300 leading-relaxed border-l-2 border-blue-500/50 pl-6 italic">
-                     {aiBriefing?.text}
+                   <div className="space-y-4">
+                      <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                         <div className="w-1 h-1 rounded-full bg-blue-500" /> Condition Report
+                      </div>
+                      <div className="text-lg font-medium text-zinc-300 leading-relaxed italic border-l-2 border-zinc-800 pl-4">
+                        {aiBriefing?.text}
+                      </div>
+                   </div>
+
+                   <div className="space-y-4">
+                      <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-2">
+                         <Zap size={10} className="fill-blue-500" /> Strategy Recommendation
+                      </div>
+                      <div className="bg-blue-600/5 border border-blue-500/20 rounded-2xl p-6 text-blue-100 font-black text-xl italic tracking-tighter leading-tight">
+                         {aiBriefing?.strategy}
+                      </div>
                    </div>
                    
                    {aiBriefing?.sources && aiBriefing.sources.length > 0 && (
-                     <div className="flex flex-wrap gap-2 pb-4">
+                     <div className="flex flex-wrap gap-2 pt-4">
                        {aiBriefing.sources.map((s, i) => (
-                         <a key={i} href={s.uri} target="_blank" className="text-[9px] bg-blue-500/10 text-blue-400 px-3 py-1.5 rounded-lg border border-blue-500/20 font-black uppercase tracking-widest">{s.title || 'Official Portal'}</a>
+                         <a key={i} href={s.uri} target="_blank" className="text-[9px] bg-white/5 text-zinc-500 px-3 py-1.5 rounded-lg border border-white/5 hover:text-blue-400 transition-colors uppercase font-bold">{s.title || 'Official Source'}</a>
                        ))}
                      </div>
                    )}
                  </div>
 
-                 {/* Fixed Footer */}
                  <div className="mt-8 pt-6 border-t border-white/5 shrink-0">
-                   <button onClick={() => setActiveModal('NONE')} className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all">Dismiss & Dispatch</button>
+                   <button onClick={() => setActiveModal('NONE')} className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all">Dismiss & Deploy</button>
                  </div>
                </>
              )}
@@ -265,10 +273,10 @@ const App: React.FC = () => {
       {activeModal === 'ADMIN_LOGIN' && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
           <div className="glass rounded-[2.5rem] p-12 w-full max-w-xs text-center border-white/10 shadow-3xl">
-            <h2 className="text-xl font-black uppercase tracking-[0.2em] text-zinc-500 mb-8">Access Key</h2>
+            <h2 className="text-xl font-black uppercase tracking-[0.2em] text-zinc-500 mb-8">System Key</h2>
             <form onSubmit={handleAdminSubmit}>
-              <input type="password" value={adminPassInput} onChange={(e) => setAdminPassInput(e.target.value)} className="w-full bg-black/50 border-2 border-zinc-800 rounded-3xl py-6 text-center text-4xl font-black mb-8 mono focus:border-blue-500 outline-none transition-colors" autoFocus />
-              <button type="submit" className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest active:scale-95 transition-all">Link System</button>
+              <input type="password" value={adminPassInput} onChange={(e) => setAdminPassInput(e.target.value)} className="w-full bg-black border-2 border-zinc-800 rounded-3xl py-6 text-center text-4xl font-black mb-8 mono focus:border-blue-500 outline-none transition-colors" autoFocus />
+              <button type="submit" className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest active:scale-95">Link System</button>
             </form>
           </div>
         </div>
