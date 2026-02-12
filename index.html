@@ -26,17 +26,18 @@
             overflow: hidden;
             font-family: 'Inter', sans-serif;
             -webkit-font-smoothing: antialiased;
+            height: 100dvh;
         }
         .mono { font-family: 'JetBrains Mono', monospace; }
         #root {
-            height: 100vh;
+            height: 100%;
             width: 100vw;
             display: flex;
-            align-items: center;
-            justify-content: center;
+            flex-direction: column;
         }
         .leaflet-container {
             background: #09090b !important;
+            border-radius: 1.5rem;
         }
         .glass {
             background: var(--card-bg);
@@ -58,7 +59,6 @@
     
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script>
-      // Shim process for Gemini SDK compatibility
       window.process = { env: { API_KEY: "" } };
     </script>
 
@@ -79,10 +79,10 @@
 </head>
 <body>
     <div id="root">
-        <div id="loader" style="text-align:center;">
-            <div style="font-size:10px; font-weight:900; letter-spacing:0.5em; color:#3b82f6; margin-bottom:10px;">SYSTEM INITIALIZING</div>
-            <div style="width:100px; height:2px; background:#18181b; margin:0 auto; overflow:hidden; border-radius:10px;">
-                <div style="width:30%; height:100%; background:#3b82f6; animation:loading 1s infinite linear;"></div>
+        <div id="loader" style="margin: auto; text-align:center;">
+            <div style="font-size:10px; font-weight:900; letter-spacing:0.5em; color:#3b82f6; margin-bottom:10px;">BOOTING LOGISTICS CORE</div>
+            <div style="width:120px; height:2px; background:#18181b; margin:0 auto; overflow:hidden; border-radius:10px;">
+                <div style="width:30%; height:100%; background:#3b82f6; animation:loading 1.5s infinite ease-in-out;"></div>
             </div>
         </div>
     </div>
@@ -95,10 +95,6 @@
     </style>
 
     <script type="module">
-        /**
-         * LOGISTICS PRO V6 BOOTSTRAPPER
-         * Resolves the "application/octet-stream" MIME type error on GitHub Pages.
-         */
         async function bootstrap() {
             const root = document.getElementById('root');
             const fileList = [
@@ -115,13 +111,11 @@
             const blobMap = new Map();
 
             try {
-                // 1. Fetch and Transpile all files
                 for (const path of fileList) {
                     const response = await fetch(path);
                     if (!response.ok) throw new Error(`Failed to fetch ${path}`);
                     let code = await response.text();
 
-                    // Perform transpilation
                     const result = Babel.transform(code, {
                         presets: ['react', ['typescript', { isTSX: true, allExtensions: true }]],
                         filename: path
@@ -129,53 +123,34 @@
 
                     let transpiledCode = result.code;
 
-                    // 2. Intercept and re-route relative imports to our Blob URLs
-                    // This regex handles various import styles: import X from './path', import {X} from '../path', etc.
                     transpiledCode = transpiledCode.replace(/from\s+['"](\.\.?\/[^'"]+)['"]/g, (match, relPath) => {
-                        // Normalize the path relative to the current file's directory
                         const currentDir = path.substring(0, path.lastIndexOf('/'));
-                        let absolutePath = new URL(relPath, `https://fake.com/${currentDir}/`).pathname.substring(1);
+                        const absolutePath = new URL(relPath, `https://x.com/${currentDir}/`).pathname.substring(1);
                         
-                        // Add extensions if missing (Babel often strips them or they might be missing in source)
-                        if (!absolutePath.endsWith('.ts') && !absolutePath.endsWith('.tsx')) {
-                            // Try common extensions
-                            const possible = [absolutePath + '.tsx', absolutePath + '.ts', absolutePath + '.js'];
-                            const found = fileList.find(f => possible.some(p => './' + p === f || p === f));
-                            if (found) absolutePath = found.replace('./', '');
+                        let resolved = './' + absolutePath;
+                        if (!resolved.endsWith('.ts') && !resolved.endsWith('.tsx')) {
+                            const found = fileList.find(f => f.startsWith(resolved + '.') || f === resolved);
+                            if (found) resolved = found;
                         }
 
-                        const blobUrl = blobMap.get('./' + absolutePath) || blobMap.get(absolutePath);
+                        const blobUrl = blobMap.get(resolved);
                         return blobUrl ? `from "${blobUrl}"` : match;
                     });
 
                     const blob = new Blob([transpiledCode], { type: 'application/javascript' });
-                    const url = URL.createObjectURL(blob);
-                    blobMap.set(path, url);
+                    blobMap.set(path, URL.createObjectURL(blob));
                 }
 
-                // 3. Execute the entry point (index.tsx)
-                const indexUrl = blobMap.get('./index.tsx');
                 const script = document.createElement('script');
                 script.type = 'module';
-                script.src = indexUrl;
+                script.src = blobMap.get('./index.tsx');
                 document.body.appendChild(script);
-
-                // Success cleanup
                 document.getElementById('loader')?.remove();
-
             } catch (err) {
-                console.error("Bootstrapper Error:", err);
-                root.innerHTML = `
-                    <div style="padding:40px; color:#ef4444; font-weight:bold; font-family:monospace; text-align:center; background:#000; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;">
-                        <div style="font-size:24px; margin-bottom:20px;">CRITICAL BOOT FAILURE</div>
-                        <div style="color:#52525b; font-size:14px; max-width:400px; line-height:1.6;">
-                            ${err.message}<br/><br/>
-                            <span style="opacity:0.5 text-transform:uppercase; letter-spacing:2px; font-size:10px;">Check browser console for module trace</span>
-                        </div>
-                    </div>`;
+                console.error("Boot Error:", err);
+                root.innerHTML = `<div style="padding:40px; color:#ef4444; font-family:monospace; text-align:center;">BOOT FAILURE: ${err.message}</div>`;
             }
         }
-
         bootstrap();
     </script>
 </body>
