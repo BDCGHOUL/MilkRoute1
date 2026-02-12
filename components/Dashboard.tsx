@@ -54,7 +54,9 @@ const Dashboard: React.FC<DashboardProps> = ({
     const fetchETAs = async () => {
       try {
         const remaining = stops.slice(index);
-        const coordsStr = `${lastPos[1]},${lastPos[0]};` + remaining.map(s => `${s.lng},${s.lat}`).join(';');
+        // Limit coordinates to 50 for OSRM public API stability
+        const limitedRemaining = remaining.slice(0, 50);
+        const coordsStr = `${lastPos[1]},${lastPos[0]};` + limitedRemaining.map(s => `${s.lng},${s.lat}`).join(';');
         const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`);
         const data = await res.json();
 
@@ -63,17 +65,26 @@ const Dashboard: React.FC<DashboardProps> = ({
           const route = data.routes[0];
           setRouteCoords(route.geometry.coordinates);
 
-          const driveTime = route.duration * ETA_MULTIPLIER;
+          // Approximate total time: OSRM duration for the limited set + linear estimate for the rest
+          let driveTime = route.duration * ETA_MULTIPLIER;
+          if (remaining.length > 50) {
+            // Add a rough estimate for the remaining stops not in the OSRM call (approx 4 mins per stop)
+            driveTime += (remaining.length - 50) * 240;
+          }
           const serviceTime = remaining.length * SERVICE_TIME_PER_STOP;
           const totalFinish = new Date(now + (driveTime + serviceTime) * 1000);
-          setEtaFinish(totalFinish.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          setEtaFinish(totalFinish.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
 
           const nextDrive = (route.legs[0]?.duration || 0) * ETA_MULTIPLIER;
           const nextArrival = new Date(now + (nextDrive) * 1000);
-          setEtaNext(nextArrival.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          setEtaNext(nextArrival.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+        } else {
+           setEtaFinish('BUSY');
+           setEtaNext('--:--');
         }
       } catch (err) {
-        setEtaFinish('CALC...');
+        setEtaFinish('FAIL');
+        setEtaNext('--:--');
       }
     };
 
@@ -84,14 +95,13 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const getNearbyStop = () => {
     if (!lastPos) return null;
-    const R = 6371e3;
     const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
       const φ1 = lat1 * Math.PI / 180;
       const φ2 = lat2 * Math.PI / 180;
       const Δφ = (lat2 - lat1) * Math.PI / 180;
       const Δλ = (lon2 - lon1) * Math.PI / 180;
       const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return 6371e3 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     };
 
     const nearbyIdx = stops.findIndex((s, i) => i >= index && haversine(lastPos[0], lastPos[1], s.lat, s.lng) < TRIGGER_DIST);
@@ -102,14 +112,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const currentStop = isArrived && nearbyStop ? nearbyStop : stops[index];
   const queue = stops.slice(index + 1, index + 3);
   const dropsLeft = Math.max(0, stops.length - index);
-
-  // Calculate actual remaining seconds for UI
   const remainingSeconds = Math.max(0, 10 - Math.floor(arrivalProgress / 10));
 
   return (
     <div className={`glass rounded-[2rem] p-5 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-4 shadow-2xl ${isArrived ? 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.3)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_50px_rgba(239,68,68,0.3)]' : 'border-white/5')}`}>
-      
-      {/* Header Stats Row */}
       <div className="flex justify-between items-start">
         <div className="flex gap-5">
            <div className="flex flex-col">
@@ -132,7 +138,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Main Waypoint Card */}
       <div className={`p-5 rounded-2xl border transition-all duration-300 relative overflow-hidden flex flex-col gap-2 ${isArrived ? 'bg-green-600/10 border-green-500/30' : (isPathImpacted ? 'bg-red-950/20 border-red-500/30' : 'bg-black/40 border-white/10')}`}>
         <div className="flex items-center justify-between">
            <div className="flex items-center gap-2">
@@ -166,33 +171,15 @@ const Dashboard: React.FC<DashboardProps> = ({
         )}
       </div>
 
-      {/* Manual Override Controls */}
       <div className="flex gap-3 h-16">
-        <button 
-          onClick={onBack}
-          className="flex-1 glass border-white/5 font-black text-xs rounded-2xl active:scale-95 transition-all text-zinc-500 uppercase tracking-widest italic"
-        >
-          Previous
-        </button>
-        <button 
-          onClick={onSkip}
-          className={`flex-[3] font-black text-xl rounded-2xl active:scale-95 transition-all shadow-xl border-b-4 uppercase tracking-tighter italic flex items-center justify-center gap-3 ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}
-        >
-          {isArrived ? (
-             <>
-               <CheckCircle2 size={24} strokeWidth={3} />
-               <span>Stay to Acknowledge</span>
-             </>
-          ) : 'Skip Waypoint'}
+        <button onClick={onBack} className="flex-1 glass border-white/5 font-black text-xs rounded-2xl active:scale-95 transition-all text-zinc-500 uppercase tracking-widest italic">Previous</button>
+        <button onClick={onSkip} className={`flex-[3] font-black text-xl rounded-2xl active:scale-95 transition-all shadow-xl border-b-4 uppercase tracking-tighter italic flex items-center justify-center gap-3 ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}>
+          {isArrived ? <><CheckCircle2 size={24} strokeWidth={3} /><span>Stay to Acknowledge</span></> : 'Skip Waypoint'}
         </button>
       </div>
 
-      {/* Persistent Telemetry Bar */}
       <div className="absolute bottom-0 left-0 w-full h-2 bg-zinc-950 overflow-hidden rounded-b-[2rem]">
-        <div 
-          className={`h-full transition-all duration-100 ease-linear shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isArrived ? 'bg-gradient-to-r from-green-600 to-green-400' : 'bg-blue-600'}`}
-          style={{ width: `${isArrived ? arrivalProgress : (index / stops.length) * 100}%` }}
-        />
+        <div className={`h-full transition-all duration-100 ease-linear shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isArrived ? 'bg-gradient-to-r from-green-600 to-green-400' : 'bg-blue-600'}`} style={{ width: `${isArrived ? arrivalProgress : (index / stops.length) * 100}%` }} />
       </div>
     </div>
   );

@@ -85,9 +85,11 @@ const App: React.FC = () => {
 
     const savedClosures = localStorage.getItem('log_nav_closures');
     if (savedClosures) setClosures(JSON.parse(savedClosures));
+    // Reset Admin on reload
+    setIsAdmin(false);
   }, []);
 
-  // Proximity Check - Separate from Timer to avoid resets on every GPS update
+  // Proximity Loop - Decoupled to avoid stuck timers
   useEffect(() => {
     if (!isStarted || !lastPos || index >= stops.length) return;
 
@@ -99,49 +101,41 @@ const App: React.FC = () => {
       if (activeArrivalIndex !== nearbyIdx) {
         setActiveArrivalIndex(nearbyIdx);
         setIsArrived(true);
+        setArrivalProgress(0);
+        startTimeRef.current = Date.now();
+
+        if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+        
+        arrivalTimerRef.current = window.setInterval(() => {
+          const now = Date.now();
+          const start = startTimeRef.current || now;
+          const elapsed = now - start;
+          const progress = Math.min((elapsed / 10000) * 100, 100);
+          setArrivalProgress(progress);
+
+          if (elapsed >= 10000) {
+            handleStopCompleted(nearbyIdx);
+          }
+        }, 100);
       }
     } else {
       if (isArrived) {
         setIsArrived(false);
         setActiveArrivalIndex(null);
+        setArrivalProgress(0);
+        if (arrivalTimerRef.current) {
+          clearInterval(arrivalTimerRef.current);
+          arrivalTimerRef.current = null;
+        }
       }
     }
-  }, [lastPos, isStarted, index, stops, isArrived, activeArrivalIndex]);
-
-  // Timer Effect - Only reacts when activeArrivalIndex changes
-  useEffect(() => {
-    if (activeArrivalIndex === null) {
-      setArrivalProgress(0);
-      if (arrivalTimerRef.current) {
-        clearInterval(arrivalTimerRef.current);
-        arrivalTimerRef.current = null;
-      }
-      return;
-    }
-
-    startTimeRef.current = Date.now();
-    setArrivalProgress(0);
-
-    arrivalTimerRef.current = window.setInterval(() => {
-      const now = Date.now();
-      const elapsed = now - (startTimeRef.current || now);
-      const progress = Math.min((elapsed / 10000) * 100, 100);
-      setArrivalProgress(progress);
-
-      if (elapsed >= 10000) {
-        handleStopCompleted(activeArrivalIndex);
-      }
-    }, 100);
-
-    return () => {
-      if (arrivalTimerRef.current) {
-        clearInterval(arrivalTimerRef.current);
-        arrivalTimerRef.current = null;
-      }
-    };
-  }, [activeArrivalIndex]);
+  }, [lastPos, isStarted, index, stops]);
 
   const handleStopCompleted = (completedIdx: number) => {
+    if (arrivalTimerRef.current) {
+      clearInterval(arrivalTimerRef.current);
+      arrivalTimerRef.current = null;
+    }
     setIsArrived(false);
     setArrivalProgress(0);
     setActiveArrivalIndex(null);
@@ -254,9 +248,8 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#050505] items-center overflow-hidden">
-      {/* Optimized Desktop container - centering the mobile-first tactical UI */}
-      <div className="flex flex-col h-full w-full max-w-[550px] bg-black text-white p-2 sm:p-4 gap-2 sm:gap-4 relative shadow-[0_0_150px_rgba(0,0,0,1)] border-x border-white/5">
+    <div className="flex flex-col h-full w-full bg-[#030303] items-center overflow-hidden">
+      <div className="flex flex-col h-full w-full max-w-[650px] bg-black text-white p-2 sm:p-4 gap-2 sm:gap-4 relative shadow-[0_0_150px_rgba(0,0,0,1)] border-x border-white/5">
         
         {!isStarted && (
           <Overlay 
@@ -269,7 +262,6 @@ const App: React.FC = () => {
           />
         )}
 
-        {/* Header */}
         <div className="flex justify-between items-center h-16 shrink-0 px-4 z-[100] glass rounded-2xl border-white/10 shadow-xl">
           <div className="flex flex-col">
             <span className="text-[10px] font-black text-blue-500 tracking-[0.4em] uppercase leading-none mb-1 italic">Logistics Core</span>
@@ -334,7 +326,7 @@ const App: React.FC = () => {
           <div className="absolute bottom-6 left-6 right-6 flex gap-4 z-[1000]">
              <button 
                onClick={() => { const s = stops[index]; if (s) window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank'); }} 
-               className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800"
+               className="flex-1 bg-blue-600 text-white h-16 rounded-2xl font-black text-sm shadow-2xl active:scale-95 uppercase tracking-widest italic flex items-center justify-center gap-3 border-b-4 border-blue-800 transition-transform"
              >
                <Navigation2 size={24} fill="currentColor" />
                Launch Navigation
@@ -348,55 +340,6 @@ const App: React.FC = () => {
              </button>
           </div>
         </div>
-
-        {activeModal === 'BRIEFING' && (
-          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/95 backdrop-blur-3xl">
-            <div className="glass border-blue-500/20 rounded-[2.5rem] p-10 w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh] relative overflow-hidden">
-               <div className="flex items-center gap-4 mb-6 shrink-0">
-                  <div className="bg-blue-600/20 p-4 rounded-2xl border border-blue-500/30"><Sparkles size={32} className="text-blue-500" /></div>
-                  <div>
-                    <h2 className="text-3xl font-black uppercase italic tracking-tighter text-white">Road Intel</h2>
-                    <p className="text-[10px] text-zinc-500 font-bold tracking-widest uppercase italic leading-none">Autonomous Grid Scanning</p>
-                  </div>
-               </div>
-               {isBriefingLoading ? (
-                 <div className="flex flex-col items-center py-20 gap-10 grow justify-center">
-                    <div className="relative">
-                      <Loader2 size={64} className="text-blue-500 animate-spin" />
-                      <Zap size={24} className="text-yellow-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                    </div>
-                    <div className="text-center space-y-3">
-                      <p className="text-zinc-300 font-black uppercase tracking-[0.3em] text-xs italic">Syncing Grid States</p>
-                    </div>
-                 </div>
-               ) : (
-                 <>
-                   <div className="flex-1 overflow-y-auto pr-3 no-scrollbar space-y-8 pb-4">
-                     <div className="space-y-4">
-                        <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2 italic">
-                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500" /> System Report
-                        </div>
-                        <div className="text-lg font-medium text-zinc-200 leading-relaxed italic border-l-2 border-zinc-800 pl-5">
-                          {aiBriefing?.text}
-                        </div>
-                     </div>
-                     <div className="space-y-4">
-                        <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-2 italic">
-                           <Zap size={10} className="fill-blue-500 text-blue-500" /> Tactical Command
-                        </div>
-                        <div className="bg-blue-600/10 border border-blue-500/30 rounded-2xl p-6 text-blue-100 font-black text-xl italic tracking-tighter leading-tight shadow-xl">
-                           {aiBriefing?.strategy}
-                        </div>
-                     </div>
-                   </div>
-                   <div className="mt-auto pt-6 border-t border-white/10 shrink-0">
-                     <button onClick={() => setActiveModal('NONE')} className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all">Acknowledge</button>
-                   </div>
-                 </>
-               )}
-            </div>
-          </div>
-        )}
 
         {activeModal === 'ADMIN_LOGIN' && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">

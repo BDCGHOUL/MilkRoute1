@@ -41,10 +41,11 @@ const MapView: React.FC<MapViewProps> = ({
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 20 }).addTo(mapRef.current);
     markersRef.current = L.layerGroup().addTo(mapRef.current);
     closuresRef.current = L.layerGroup().addTo(mapRef.current);
-    routeLineRef.current = L.polyline([], { color: '#3b82f6', weight: 4, opacity: 0.6, dashArray: '8, 8' }).addTo(mapRef.current);
+    // Route line is now solid for better visibility
+    routeLineRef.current = L.polyline([], { color: '#3b82f6', weight: 6, opacity: 0.8, lineJoin: 'round' }).addTo(mapRef.current);
     
     userMarkerRef.current = L.circleMarker([0, 0], {
-      radius: 8, fillColor: '#ffffff', color: '#3b82f6', weight: 3, fillOpacity: 1
+      radius: 9, fillColor: '#ffffff', color: '#3b82f6', weight: 4, fillOpacity: 1
     }).addTo(mapRef.current);
 
     mapRef.current.on('click', (e) => {
@@ -121,13 +122,13 @@ const MapView: React.FC<MapViewProps> = ({
     userMarkerRef.current.setLatLng(lastPos);
     const currentStop = stops[index];
     if (currentStop) {
-      // AUTO ZOOM LOGIC: Fit map to both user and current waypoint
+      // AUTO ZOOM: Include padding to ensure UI doesn't cover user or stop
       const bounds = L.latLngBounds([lastPos, [currentStop.lat, currentStop.lng]]);
       mapRef.current.fitBounds(bounds, { 
-        padding: [80, 80], 
-        maxZoom: 17,
+        padding: [100, 100], 
+        maxZoom: 18,
         animate: true,
-        duration: 0.8
+        duration: 0.5
       });
 
       const fetchRoute = async () => {
@@ -137,12 +138,17 @@ const MapView: React.FC<MapViewProps> = ({
           if (data.routes?.[0]?.geometry) {
             const coords = data.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
             routeLineRef.current?.setLatLngs(coords);
+          } else {
+             // Fallback to straight line if API fails
+             routeLineRef.current?.setLatLngs([[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]]);
           }
         } catch (e) {
           routeLineRef.current?.setLatLngs([[lastPos[0], lastPos[1]], [currentStop.lat, currentStop.lng]]);
         }
       };
       fetchRoute();
+    } else {
+       routeLineRef.current?.setLatLngs([]);
     }
   }, [lastPos, index, stops]);
 
