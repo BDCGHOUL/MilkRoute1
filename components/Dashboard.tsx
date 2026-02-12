@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Stop, RoadClosure } from '../types';
 import { ETA_MULTIPLIER, SERVICE_TIME_PER_STOP } from '../constants';
-import { AlertTriangle, MapPin, Clock, ArrowRight } from 'lucide-react';
+import { AlertTriangle, MapPin, Clock, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 interface DashboardProps {
   index: number;
@@ -23,19 +23,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [isPathImpacted, setIsPathImpacted] = useState(false);
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
 
-  const getHaversineDist = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
-
   const checkCollision = useCallback((coords: [number, number][], activeClosures: RoadClosure[]) => {
     if (!activeClosures.length || !coords.length) return false;
     const today = new Date().toISOString().split('T')[0];
@@ -44,7 +31,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         for (const p of coords) {
           const dLat = Math.abs(p[1] - c.lat);
           const dLng = Math.abs(p[0] - c.lng);
-          if (dLat < 0.001 && dLng < 0.001) return true;
+          if (dLat < 0.0015 && dLng < 0.0015) return true;
         }
       }
     }
@@ -69,7 +56,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         const remaining = stops.slice(index);
         const coordsStr = `${lastPos[1]},${lastPos[0]};` + remaining.map(s => `${s.lng},${s.lat}`).join(';');
         const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`);
-        if (!res.ok) throw new Error("OSRM Limit");
         const data = await res.json();
 
         if (data.routes?.[0]) {
@@ -83,118 +69,105 @@ const Dashboard: React.FC<DashboardProps> = ({
           setEtaFinish(totalFinish.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
           const nextDrive = (route.legs[0]?.duration || 0) * ETA_MULTIPLIER;
-          const nextArrival = new Date(now + (nextDrive + SERVICE_TIME_PER_STOP) * 1000);
+          const nextArrival = new Date(now + (nextDrive) * 1000);
           setEtaNext(nextArrival.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
         }
       } catch (err) {
-        const now = Date.now();
-        const remaining = stops.slice(index);
-        let totalDirectDist = 0;
-        let prev = { lat: lastPos[0], lng: lastPos[1] };
-        remaining.forEach(s => {
-          totalDirectDist += getHaversineDist(prev.lat, prev.lng, s.lat, s.lng);
-          prev = s;
-        });
-        const avgSpeed = 7; 
-        const driveTime = (totalDirectDist / avgSpeed) * ETA_MULTIPLIER;
-        const serviceTime = remaining.length * SERVICE_TIME_PER_STOP;
-        const totalFinish = new Date(now + (driveTime + serviceTime) * 1000);
-        setEtaFinish(totalFinish.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-        setEtaNext("--:--");
+        setEtaFinish('CALC...');
       }
     };
 
-    const timer = setInterval(fetchETAs, 20000);
     fetchETAs();
+    const timer = setInterval(fetchETAs, 30000);
     return () => clearInterval(timer);
   }, [index, stops, lastPos]);
 
   const currentStop = stops[index];
-  const queue = stops.slice(index + 1, index + 4);
+  const queue = stops.slice(index + 1, index + 3);
   const dropsLeft = Math.max(0, stops.length - index);
 
   return (
-    <div className={`glass rounded-[2rem] p-5 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-4 ${isArrived ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.15)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 'border-white/5')}`}>
+    <div className={`glass rounded-[2rem] p-4 flex-shrink-0 relative border-2 transition-all duration-500 flex flex-col gap-3 max-h-[35vh] sm:max-h-none ${isArrived ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.2)]' : (isPathImpacted ? 'border-red-600 shadow-[0_0_40px_rgba(239,68,68,0.2)]' : 'border-white/5')}`}>
       
-      {/* Top Section: Metrics */}
-      <div className="flex justify-between items-center">
+      {/* Metrics Row */}
+      <div className="flex justify-between items-start">
         <div className="flex gap-4">
            <div className="flex flex-col">
-              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Queue</span>
-              <span className="text-4xl font-black text-white mono leading-none">{dropsLeft}</span>
+              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5">Queue</span>
+              <span className="text-3xl font-black text-white mono leading-none">{dropsLeft}</span>
            </div>
-           <div className="w-[1px] h-10 bg-white/5" />
+           <div className="w-[1px] h-8 bg-white/10 self-center" />
            <div className="flex flex-col">
-              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">ETA Fin</span>
-              <span className="text-2xl font-black text-red-500 mono leading-none mt-1">{etaFinish}</span>
+              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5">Finish</span>
+              <span className="text-xl font-black text-red-500 mono leading-none">{etaFinish}</span>
            </div>
         </div>
         
-        <div className="text-right flex flex-col items-end">
-           <div className="flex items-center gap-2 bg-yellow-400/10 border border-yellow-400/20 px-3 py-1.5 rounded-full mb-1">
-              <Clock size={14} className="text-yellow-400" />
-              <span className="text-xs font-black text-yellow-400 mono">{etaNext}</span>
+        <div className="flex flex-col items-end">
+           <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded-full mb-1">
+              <Clock size={12} className="text-blue-500" />
+              <span className="text-[10px] font-black text-blue-500 mono">{etaNext}</span>
            </div>
-           <span className="text-[9px] font-black text-zinc-600 uppercase tracking-tighter">Next Arrival Window</span>
+           <span className="text-[8px] font-black text-zinc-600 uppercase tracking-tighter">Next Arrival Window</span>
         </div>
       </div>
 
-      {/* Main Action Area: Next Stop */}
-      <div className={`p-5 rounded-2xl border transition-all duration-300 relative overflow-hidden flex flex-col gap-1 ${isPathImpacted ? 'bg-red-950/20 border-red-500/30' : 'bg-black/40 border-white/5'}`}>
-        <div className="flex items-center justify-between mb-2">
+      {/* Destination Card */}
+      <div className={`p-4 rounded-2xl border transition-all duration-300 relative overflow-hidden flex flex-col ${isArrived ? 'bg-green-600/10 border-green-500/30' : (isPathImpacted ? 'bg-red-950/20 border-red-500/30' : 'bg-black/40 border-white/5')}`}>
+        <div className="flex items-center justify-between mb-1.5">
            <div className="flex items-center gap-2">
-              {isPathImpacted ? (
-                <AlertTriangle size={16} className="text-red-500 animate-bounce" />
-              ) : (
-                <MapPin size={16} className="text-blue-500" />
-              )}
-              <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${isPathImpacted ? 'text-red-500' : 'text-zinc-500'}`}>
-                {isPathImpacted ? 'Route Blocked' : 'Current Destination'}
+              {isArrived ? <CheckCircle2 size={14} className="text-green-500 animate-pulse" /> : (isPathImpacted ? <AlertTriangle size={14} className="text-red-500" /> : <MapPin size={14} className="text-blue-500" />)}
+              <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isArrived ? 'text-green-500' : (isPathImpacted ? 'text-red-500' : 'text-zinc-500')}`}>
+                {isArrived ? 'Arrived at Stop' : (isPathImpacted ? 'Path Obstruction' : 'Active Waypoint')}
               </span>
            </div>
            <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest mono">Stop #{index + 1}</span>
         </div>
         
-        <h2 className={`text-2xl font-black truncate tracking-tight ${isPathImpacted ? 'text-white' : 'text-blue-100'}`}>
-          {currentStop ? currentStop.addr : 'E.O.S (END OF SHIFT)'}
+        <h2 className={`text-xl sm:text-2xl font-black truncate tracking-tighter italic ${isArrived ? 'text-white' : (isPathImpacted ? 'text-red-100' : 'text-blue-100')}`}>
+          {currentStop ? currentStop.addr : 'END OF ROUTE'}
         </h2>
 
-        {/* Upcoming List (Mini) */}
-        {queue.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-white/5 flex items-center gap-3 overflow-x-auto no-scrollbar">
-             <span className="text-[8px] font-black text-zinc-600 uppercase tracking-widest shrink-0">NEXT UP</span>
+        {/* Mini Queue */}
+        {queue.length > 0 && !isArrived && (
+          <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-2 overflow-hidden">
+             <span className="text-[7px] font-black text-zinc-700 uppercase tracking-widest shrink-0">NEXT</span>
              {queue.map((s, idx) => (
-               <div key={idx} className="flex items-center gap-2 shrink-0">
-                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
-                  <span className="text-[10px] font-bold text-zinc-500 truncate max-w-[80px]">{s.addr}</span>
-                  {idx < queue.length - 1 && <ArrowRight size={10} className="text-zinc-800" />}
+               <div key={idx} className="flex items-center gap-2 shrink-0 max-w-[100px]">
+                  <span className="text-[9px] font-bold text-zinc-600 truncate">{s.addr}</span>
+                  {idx < queue.length - 1 && <ArrowRight size={8} className="text-zinc-800" />}
                </div>
              ))}
           </div>
         )}
       </div>
 
-      {/* Bottom Controls */}
-      <div className="flex gap-4 h-16">
+      {/* Control Surface */}
+      <div className="flex gap-3 h-14">
         <button 
           onClick={onBack}
-          className="flex-1 glass border-white/5 hover:bg-white/5 font-black text-sm rounded-2xl active:scale-95 transition-all text-zinc-400 uppercase tracking-widest"
+          className="flex-1 glass border-white/5 font-black text-[10px] rounded-xl active:scale-95 transition-all text-zinc-500 uppercase tracking-widest"
         >
-          BACK
+          Back
         </button>
         <button 
           onClick={onSkip}
-          className={`flex-[2] font-black text-xl rounded-2xl active:scale-95 transition-all shadow-xl shadow-blue-500/10 border-b-4 uppercase tracking-tighter ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}
+          className={`flex-[3] font-black text-lg rounded-xl active:scale-95 transition-all shadow-xl border-b-4 uppercase tracking-tighter flex items-center justify-center gap-3 ${isArrived ? 'bg-green-600 border-green-800 text-white' : 'bg-blue-600 border-blue-800 text-white'}`}
         >
-          {isArrived ? 'PROCEED STOP' : 'SKIP WAYPOINT'}
+          {isArrived ? (
+            <>
+              <CheckCircle2 size={18} />
+              <span>Acknowledge</span>
+            </>
+          ) : 'Skip Stop'}
         </button>
       </div>
 
-      {/* Arrival Progress Bar */}
+      {/* Arrival / Auto-Advance Bar */}
       <div className="absolute bottom-0 left-0 w-full h-1.5 bg-zinc-900 overflow-hidden rounded-b-[2rem]">
         <div 
-          className="h-full bg-gradient-to-r from-green-600 to-green-400 transition-all duration-100 ease-linear shadow-[0_0_10px_rgba(34,197,94,0.5)]"
-          style={{ width: `${arrivalProgress}%` }}
+          className={`h-full transition-all duration-100 ease-linear ${isArrived ? 'bg-gradient-to-r from-green-600 to-green-400' : 'bg-blue-600'}`}
+          style={{ width: `${isArrived ? arrivalProgress : 0}%` }}
         />
       </div>
     </div>
